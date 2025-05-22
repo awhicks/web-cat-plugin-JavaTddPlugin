@@ -111,6 +111,8 @@ $usePit = ($usePit =~ m/^(true|on|yes|y|1)$/i);
 if ($usePit) { $cfg->setProperty('enablePit', 'true'); }
 my $useEMRN = $cfg->getProperty('useEMRN', 0);
 $useEMRN = ($useEMRN =~ m/^(true|on|yes|y|1)$/i);
+my $useEMRNManual = $cfg->getProperty('useEMRNManual', 0);
+$useEMRNManual = ($useEMRNManual =~ m/^(true|on|yes|y|1)$/i);
 my $useJdk11 = $cfg->getProperty('useJdk11', 0);
 $useJdk11 = ($useJdk11 =~ m/^(true|on|yes|y|1)$/i);
 my $allTestOutcomeResults = '';
@@ -338,7 +340,8 @@ my %perFileRuleStruct = (
 #-------------------------------------------------------
 if ($useJdk11)
 {
-    $ENV{JAVA_HOME} = '/usr/java/jdk-11';
+#    $ENV{JAVA_HOME} = '/usr/java/jdk-11';
+    $ENV{JAVA_HOME} = '/usr/lib/jvm/java-11';
 }
 Web_CAT::Utilities::initFromConfig($cfg);
 if (defined($ENV{JAVA_HOME}))
@@ -1891,8 +1894,27 @@ if (!$buildFailed) # $can_proceed)
             }
             if (exists $file->{error})
             {
+                my $serial_version_uid_line = 0;
                 foreach my $violation (@{ $file->{error} })
                 {
+                    if ($violation->{source}->content eq
+                        'com.puppycrawl.tools.checkstyle.checks.naming.ConstantNameCheck')
+                    {
+                      my $msg = $violation->{message}->content;
+                      if (!defined($msg)) { $msg = ''; }
+                      if ($msg =~ m/serial_version_UID/o)
+                      {
+                          $serial_version_uid_line = $violation->{line}->content;
+                          last;
+                      }
+                    }
+                }
+                foreach my $violation (@{ $file->{error} })
+                {
+                    next if (
+                      $serial_version_uid_line > 0
+                      && defined $violation->{line}->content
+                      && $violation->{line}->content == $serial_version_uid_line);
                     my $rule = $violation->{source}->content;
                     $rule =~
                         s/^com\.puppycrawl\.tools\.checkstyle\.checks.*\.//o;
@@ -3671,6 +3693,7 @@ sub markCodingSectionUsingInstrResults
 #=============================================================================
 # generate reference test results
 #=============================================================================
+my $HCV = 0;
 if (defined $status{'instrTestResults'})
 {
     my $sectionTitle = "Estimate of Problem Coverage ";
@@ -3761,6 +3784,7 @@ EOF
     {
         my $hints = $status{'instrTestResults'}->formatHints(
             1, $hintsLimit);
+        if ($hints =~ /HCV/) { $HCV = 1; }
         # print "hints = $hints\n";
         if (defined $hints && $hints ne "" && $hints =~ /honor code viol/i)
         {
@@ -3906,6 +3930,7 @@ EOF
                 ? $status{'instrTestResults'}->formatAllTestOutcomes
                 : $status{'instrTestResults'}->formatHints(
                     0, $hintsLimit);
+            if ($hints =~ /HCV/) { $HCV = 1; }
             if ($showAllTestOutcomes) { $allTestOutcomeResults = $hints; }
             # print "hints = $hints\n";
             my $label = $showAllTestOutcomes
@@ -5446,6 +5471,10 @@ sub smartHtmlEscapeAndPeel
 # Student feedback
 # -----------
 {
+    if ($useEMRN)
+    {
+        addReportFileWithStyle($cfg, 'emrn.html', 'text/html', 1);
+    }
     my $rptFile = $status{'feedback'};
     if (defined $rptFile)
     {
@@ -5935,6 +5964,7 @@ print IMPROVEDFEEDBACKFILE <<END_MESSAGE;
 </div>
 END_MESSAGE
 }
+}
 
 
 # Behavior Section
@@ -6280,15 +6310,17 @@ print IMPROVEDFEEDBACKFILE <<END_MESSAGE;
 </div>
 END_MESSAGE
 }
-}
+
 
 print IMPROVEDFEEDBACKFILE "</div>\n";
 close IMPROVEDFEEDBACKFILE;
 
 #print compilerErrorHintKey('final parameter abc may not be assigned');
 
+
+#=============================================================================
 # PDF printout
-# -----------
+#=============================================================================
 if (-f $pdfPrintout)
 {
     addReportFileWithStyle(
@@ -6301,14 +6333,10 @@ if (-f $pdfPrintout)
         "PDF code printout");
 }
 
-# Script log
-# ----------
-if (-f $scriptLog && stat($scriptLog)->size > 0)
-{
-    addReportFileWithStyle($cfg, $scriptLogRelative, "text/plain", 0, "admin");
-    addReportFileWithStyle($cfg, $antLogRelative,    "text/plain", 0, "admin");
-}
 
+#=============================================================================
+# EMRN Scoring and Feedback
+#=============================================================================
 if ($useEMRN)
 {
   my $maxPossible = $maxCorrectnessScore + $maxToolScore;
@@ -6317,67 +6345,145 @@ if ($useEMRN)
   my $subTime = $cfg->getProperty('submissionTimestamp', 0);
   my $dueTime = $cfg->getProperty('dueDateTimestamp', $subTime);
   
+  my $emrnCmt = '';
+  my $emrnCategory = 'Not Assessable';
+#   print <<EOF;
+# rawPct = $rawPct
+# runtimeScore = $runtimeScore, max = $maxCorrectnessScore
+# staticScore = $staticScore, max = $maxToolScore
+# EOF
+  
   # Meets expectations
-  if ($maxPossible >= 100
-    && $rawPct >= 0.95
+  if ($rawPct >= 0.95
     && $runtimeScore / $maxCorrectnessScore >= 0.95
     && $staticScore / $maxToolScore >= 0.95
-    && $subTime <= $dueTime)
+    # && $subTime <= $dueTime
+    )
   {
-    $staticScore = $maxToolScore;
-    $runtimeScore = $maxCorrectnessScore;
-    $cfg->setProperty('score.category', 'Excellent');
-  }
-  elsif ($rawPct >= 0.85
-    && $runtimeScore / $maxCorrectnessScore >= 0.85
-    && $staticScore / $maxToolScore >= 0.90)
-  {
-    if ($maxPossible < 100)
+    $staticScore = $maxToolScore; # * 1.1;
+    $runtimeScore = $maxCorrectnessScore; # * 1.1;
+    $emrnCategory = 'Excellent';
+    if ($runtimeScore < $maxCorrectnessScore || $staticScore < $maxToolScore)
     {
+      $emrnCmt = 'Your submission passes most auto-grader checks and '
+        . 'appears to only have a few small issues remaining. To perfect '
+        . 'your work, '
+        . 'use the feedback below to identify any remaining areas for '
+        . 'improvement.';
+    }
+    else
+    {
+      $emrnCmt = 'Your submission passes all auto-grader checks for this '
+        . 'assignment.';
+    }
+  }
+  elsif ($rawPct >= 0.86
+    && $runtimeScore / $maxCorrectnessScore >= 0.86
+    && $staticScore / $maxToolScore >= 0.92)
+  {
+#     if ($maxPossible < 100)
+#     {
       $staticScore = $maxToolScore;
       $runtimeScore = $maxCorrectnessScore;
-    }
-    elsif ($staticScore == $maxToolScore)
-    {
-      $runtimeScore = $maxPossible * 0.8 - $staticScore;
-    }
-    elsif ($runtimeScore == $maxCorrectnessScore)
-    {
-      $staticScore = $maxPossible * 0.8 - $runtimeScore;
-    }
-    else
-    {
-      $staticScore = 0.8 * $maxToolScore;
-      $runtimeScore = 0.8 * $maxCorrectnessScore;
-    }
-    $cfg->setProperty('score.category', 'Meets Expectations');
+      if (!$useEMRNManual)
+      {
+        $staticScore *= 10.0 / 11.0;
+        $runtimeScore *= 10.0 / 11.0;
+      }
+#     }
+#     elsif ($staticScore == $maxToolScore)
+#     {
+#       $runtimeScore = $maxPossible * 0.8 - $staticScore;
+#     }
+#     elsif ($runtimeScore == $maxCorrectnessScore)
+#     {
+#       $staticScore = $maxPossible * 0.8 - $runtimeScore;
+#     }
+#     else
+#     {
+#       $staticScore = 0.8 * $maxToolScore;
+#       $runtimeScore = 0.8 * $maxCorrectnessScore;
+#     }
+    $emrnCategory = 'Meets Expectations';
+    $emrnCmt = 'Your submission meets most expectations, but there are still '
+      . 'some areas where improvements can be made. See the feedback below '
+      . 'to address these issues.';
   }
-  elsif ($rawPct > 0)
+  elsif ($rawPct > 0 && $runtimeScore > 0)
   {
-    my $target = 50; # Should be programmable
-    if ($staticScore == $maxToolScore)
-    {
-      $runtimeScore = $target - $staticScore;
-    }
-    elsif ($runtimeScore == $maxCorrectnessScore)
-    {
-      $staticScore = $target - $runtimeScore;
-    }
-    else
-    {
-      $staticScore = $target / 2;
-      $runtimeScore = $target / 2;
-    }
-    $cfg->setProperty('score.category', 'Revision Needed');
+    my $target = 10; # Should be programmable
+    $staticScore = $maxToolScore;
+    $runtimeScore = $maxCorrectnessScore; # * 0.1;
+      if (!$useEMRNManual)
+      {
+        $staticScore *= 1.0 / 11.0;
+        $runtimeScore *= 1.0 / 11.0;
+      }
+#     if ($staticScore == $maxToolScore)
+#     {
+#       $runtimeScore = $target - $staticScore;
+#     }
+#     elsif ($runtimeScore == $maxCorrectnessScore)
+#     {
+#       $staticScore = $target - $runtimeScore;
+#     }
+#     else
+#     {
+#       $staticScore = $target / 2;
+#       $runtimeScore = $target / 2;
+#     }
+    $emrnCategory = 'Revision Needed';
+    $emrnCmt = 'Your submission meets some expectations, but there are still '
+      . 'some areas where improvements are needed. See the feedback below '
+      . 'to address these issues.';
   }
   else
   {
     $runtimeScore = 0;
     $staticScore = 0;
-    $cfg->setProperty('score.category', 'Not Assessable');
+    $emrnCategory = 'Not Assessable';
+    $emrnCmt = 'Your submission cannot be assessed effectively. See the '
+      . 'feedback below to identify the issues that need to be addressed.';
   }
+
+  print "EMRN category = $emrnCategory\n" if ($debug > 1);
+  my $emrnLetter = substr($emrnCategory, 0, 1);
+  $cfg->setProperty('score.category', $emrnCategory);
+  if ($useEMRNManual)
+  {
+    $emrnCmt .= ' Be sure to double-check the assignment\'s manually '
+      . 'graded criteria yourself.';
+  }
+
+  my $emrnFileName = "$resultDir/emrn.html";
+        open(EMRNFEEDBACKFILE, ">$emrnFileName")
+            || croak "Cannot open '$emrnFileName' for writing: $!";
+
+        print EMRNFEEDBACKFILE <<END_MESSAGE;
+<div class="row">
+  <div class="col-12 col-md-6"><div class="module">
+    <h1>Auto-Grader Criteria: ($emrnLetter) $emrnCategory</h1>
+    <p>$emrnCmt</p>
+  </div></div>
+</div>
+END_MESSAGE
+  close(EMRNFEEDBACKFILE);
 }
 
+
+#=============================================================================
+# Script log
+#=============================================================================
+if (-f $scriptLog && stat($scriptLog)->size > 0)
+{
+    addReportFileWithStyle($cfg, $scriptLogRelative, "text/plain", 0, "admin");
+    addReportFileWithStyle($cfg, $antLogRelative,    "text/plain", 0, "admin");
+}
+
+
+#=============================================================================
+# Save score and rewrite properties
+#=============================================================================
 $cfg->setProperty('score.correctness', $runtimeScore);
 $cfg->setProperty('score.tools',       $staticScore );
 $cfg->setProperty('expSectionId',      $expSectionId);

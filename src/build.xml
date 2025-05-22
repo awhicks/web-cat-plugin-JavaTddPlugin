@@ -571,7 +571,7 @@ staticAnalysisSrcExclusionPattern = ${staticAnalysisSrcExclusionPattern}
       sourceDir="${pit.src.dir}"
       fullMutationMatrix="true"
       outputFormats="CSV,XML"
-      threads="4"
+      threads="1"
       failonerror="false"
       jvmArgs="-Djava.io.tmpdir=${tempdir} -Xmx1024m"
     />
