@@ -23,6 +23,7 @@ use Web_CAT::FeedbackGenerator;
 use Web_CAT::JUnitResultsReader;
 use XML::Smart;
 use Data::Dump qw(dump);
+use Time::Local;
 
 
 #=============================================================================
@@ -30,6 +31,7 @@ use Data::Dump qw(dump);
 #=============================================================================
 my $propfile   = $ARGV[0];     # property file name
 my $cfg        = Config::Properties::Simple->new(file => $propfile);
+$cfg->{wrap} = 0;
 
 my $pluginHome = $cfg->getProperty('pluginHome');
 {
@@ -52,6 +54,7 @@ use Web_CAT::Utilities qw(
     filePattern
     copyHere
     htmlEscape
+    smartHtmlEscape
     addReportFile
     scanTo
     scanThrough
@@ -70,6 +73,7 @@ use Web_CAT::ErrorMapper qw(
     compilerErrorEnhancedMessage
     setResultDir
     codingStyleMessageValue
+    findBugsMessage
     );
 use Web_CAT::Indicators::ProgressTracker;
 use Web_CAT::Indicators::ProgressCommenter;
@@ -84,6 +88,7 @@ use Web_CAT::Maria;
 my $pid        = $cfg->getProperty('userName');
 my $workingDir = $cfg->getProperty('workingDir');
 my $resultDir  = $cfg->getProperty('resultDir');
+my $solutionDir= $cfg->getProperty('solutionDir');
 
 #Using ResultDir in ErrorMapper file and we set the value here
 setResultDir($resultDir);
@@ -101,6 +106,35 @@ $useDailyMissions = ($useDailyMissions =~ m/^(true|on|yes|y|1)$/i);
 if ($useDailyMissions) { $useIndicatorFeedback = 1; }
 my $showAllTestOutcomes = $cfg->getProperty('showAllTestOutcomes', 0);
 $showAllTestOutcomes = ($showAllTestOutcomes =~ m/^(true|on|yes|y|1)$/i);
+my $useFindBugs = $cfg->getProperty('useFindBugs', 0);
+$useFindBugs = ($useFindBugs =~ m/^(true|on|yes|y|1)$/i);
+if ($useFindBugs) { $cfg->setProperty('enableFindBugs', 'true'); }
+my $usePit = $cfg->getProperty('usePit', 0);
+$usePit = ($usePit =~ m/^(true|on|yes|y|1)$/i);
+if ($usePit) { $cfg->setProperty('enablePit', 'true'); }
+my $useTestCaseValidation = $cfg->getProperty('useTestCaseValidation', 0);
+$useTestCaseValidation = ($useTestCaseValidation =~ m/^(true|on|yes|y|1)$/i);
+if ($useTestCaseValidation) { $cfg->setProperty('enableTestCaseValidation', 'true'); }
+my $showTestCaseValidation = $cfg->getProperty('showTestCaseValidation', 0);
+$showTestCaseValidation = ($showTestCaseValidation =~ m/^(true|on|yes|y|1)$/i);
+if ($showTestCaseValidation) { $cfg->setProperty('showTestCaseValidation', 'true'); }
+my $testCaseValidationFileName = $cfg->getProperty('testCaseValidationFileName', 'ProblemSpecTest');
+if ($useTestCaseValidation) { $cfg->setProperty('testCaseValidationFileName', $testCaseValidationFileName); }
+my $maxValidationPenalty = $cfg->getProperty('maxValidationPenalty', 10);
+if ($maxValidationPenalty) { $cfg->setProperty('maxValidationPenalty', $maxValidationPenalty); }
+my $validationTestsRequired = $cfg->getProperty('validationTestsRequired', 0);
+if ($validationTestsRequired) { $cfg->setProperty('validationTestsRequired', $validationTestsRequired); }
+my $validationFailuresAllowed = $cfg->getProperty('validationFailuresAllowed', 0);
+if ($validationFailuresAllowed) { $cfg->setProperty('validationFailuresAllowed', $validationFailuresAllowed); }
+my $useEMRN = $cfg->getProperty('useEMRN', 0);
+$useEMRN = ($useEMRN =~ m/^(true|on|yes|y|1)$/i);
+my $useEMRNManual = $cfg->getProperty('useEMRNManual', 0);
+$useEMRNManual = ($useEMRNManual =~ m/^(true|on|yes|y|1)$/i);
+my $emrnExcellent = $cfg->getProperty('emrnExcellent', 100);
+my $emrnMeetsExpectations = $cfg->getProperty('emrnMeetsExpectations', 100);
+my $emrnRevisionNeeded = $cfg->getProperty('emrnRevisionNeeded', 100);
+my $useJdk11 = $cfg->getProperty('useJdk11', 0);
+$useJdk11 = ($useJdk11 =~ m/^(true|on|yes|y|1)$/i);
 my $allTestOutcomeResults = '';
 my $allTestOutcomesLeader = '';
 my $progressTracker = new Web_CAT::Indicators::ProgressTracker($cfg);
@@ -119,6 +153,9 @@ my $maxCorrectnessScore   = $cfg->getProperty('max.score.correctness',
 #my $instructorCasesPassed  = undef;
 my $instructorCasesPercent = 0;
 my $studentCasesPercent    = 0;
+my $validateCasesPercent   = 0;
+my $validationPenalty      = 0;
+my $printableValidationPenalty = 0;
 my $codeCoveragePercent    = 0;
 #my $studentTestMsgs;
 my $hasJUnitErrors         = 0;
@@ -128,6 +165,7 @@ my %status = (
     'studentHasSrcs'     => 0,
     'studentTestResults' => undef,
     'instrTestResults'   => undef,
+    'validateTestResults'=> undef,
     'toolDeductions'     => 0,
     'compileMsgs'        => "",
     'compileErrs'        => 0,
@@ -161,6 +199,7 @@ my %styleSectionStatus = (
     'whitespace'                => 1,
     'lineLength'                => 1,
     'other'                     => 1,
+    'pointsGained'              => 0,
     'pointsGainedPercent'       => 100
 );
 
@@ -182,6 +221,8 @@ my %behaviorSectionStatus = (
     'outOfMemoryErrors'         => 1,
     'problemCoveragePercent'    => 100
 );
+
+my @milestoneResults;
 
 # A limit for number of errors in a subcategory in the feedback.
 # Example: codingFlaws is a subcategory.
@@ -320,10 +361,138 @@ my %perFileRuleStruct = (
     'outOfMemoryErrors'         => undef
 );
 
+#=============================================================================
+# Multiple Milestone Settings
+#=============================================================================
+
+my $MAX_MILESTONES = 3; # Maximum number of milestones to check for
+my @milestoneDueDatesTimestamps = ();
+my @milestoneMinStudentTests = ();
+my @milestoneMinRefTests = ();
+my @milestoneStyleMins = ();
+my @milestoneMinMutationCoverages = ();
+my @milestoneNumbers = ();
+my $milestoneCount = 0;
+
+sub milestoneHasConfiguredRequirements
+{
+    my ($dueDateProp, $dueTimeProp, $studentTestsProp, $refTestsProp,
+        $styleProp, $coverageProp) = @_;
+
+    return 1 if (defined $dueDateProp && $dueDateProp ne '' && $dueDateProp ne '0');
+    return 1 if (defined $dueTimeProp && $dueTimeProp ne '' && $dueTimeProp ne '0');
+    return 1 if (defined $studentTestsProp && $studentTestsProp ne '' && $studentTestsProp ne '0');
+    return 1 if (defined $refTestsProp && $refTestsProp ne '' && $refTestsProp ne '0');
+    return 1 if (defined $styleProp && $styleProp ne '' && $styleProp ne '0');
+    return 1 if (defined $coverageProp && $coverageProp ne '' && $coverageProp ne '0');
+
+    return 0;
+}
+
+sub formatTimestampForDisplay
+{
+    my ($timestampMillis) = @_;
+
+    return 'Unknown' unless defined $timestampMillis && $timestampMillis ne '';
+    return 'Unknown' unless $timestampMillis =~ /^\d+$/;
+
+    my $timestampSeconds = int($timestampMillis / 1000);
+    my @timeParts = localtime($timestampSeconds);
+    return sprintf('%04d-%02d-%02d %02d:%02d:%02d',
+        $timeParts[5] + 1900,
+        $timeParts[4] + 1,
+        $timeParts[3],
+        $timeParts[2],
+        $timeParts[1],
+        $timeParts[0]);
+}
+
+# Dynamically read properties for milestones
+for (my $i = 1; $i <= $MAX_MILESTONES; $i++)
+{
+    my $dueDateProp = $cfg->getProperty("milestoneDueDate.$i");
+    my $dueTimeProp = $cfg->getProperty("milestoneDueTime.$i");
+    my $studentTestsProp = $cfg->getProperty("milestoneMinStudentTests.$i");
+    my $refTestsProp = $cfg->getProperty("milestoneMinRefTests.$i");
+    my $styleProp = $cfg->getProperty("milestoneStyleMin.$i");
+    my $coverageProp = $cfg->getProperty("milestoneMinMutationCoverage.$i");
+
+    my $hasMilestone = milestoneHasConfiguredRequirements(
+        $dueDateProp, $dueTimeProp, $studentTestsProp,
+        $refTestsProp, $styleProp, $coverageProp);
+    next unless $hasMilestone;
+
+    my $epochSeconds = 0;
+    my $rawIntDate = defined $dueDateProp ? $dueDateProp : 0;
+    if (defined $rawIntDate && $rawIntDate =~ m/^\d{8}$/)
+    {
+        my $year  = int($rawIntDate / 10000);
+        my $month = int(($rawIntDate % 10000) / 100);
+        my $day   = $rawIntDate % 100;
+
+        # milestoneDueTime is HHMMSS; default to 23:59:59 when omitted/invalid.
+        my $rawDueTime = defined $dueTimeProp ? $dueTimeProp : 235959;
+        if (!defined($rawDueTime) || $rawDueTime !~ m/^\d{1,6}$/)
+        {
+            $rawDueTime = 235959;
+        }
+        $rawDueTime = sprintf("%06d", $rawDueTime);
+        my ($hour, $minute, $second) = $rawDueTime =~ m/^(\d{2})(\d{2})(\d{2})$/;
+
+        $epochSeconds = eval {
+            timelocal($second, $minute, $hour, $day, $month - 1, $year - 1900);
+        };
+        $epochSeconds = 0 if $@ || !defined($epochSeconds);
+    }
+
+    # Store milestones densely at 0-based indices for consistent access.
+    my $idx = $milestoneCount;
+    $milestoneDueDatesTimestamps[$idx] = $epochSeconds * 1000;
+    $milestoneMinStudentTests[$idx] = defined $studentTestsProp ? $studentTestsProp : 0;
+    $milestoneMinRefTests[$idx] = defined $refTestsProp ? $refTestsProp : 0;
+    $milestoneStyleMins[$idx] = defined $styleProp ? $styleProp : 0;
+    $milestoneMinMutationCoverages[$idx] = defined $coverageProp ? $coverageProp : 0;
+    $milestoneNumbers[$idx] = $i;
+
+    $milestoneCount++;
+}
+
+# Check which milestones have been passed
+my @milestoneAlreadyPassed = ();
+
+for (my $i = 0; $i < $milestoneCount; $i++) {
+    my $mNum = $milestoneNumbers[$i];
+
+    # Read property from config file
+    my $status = $cfg->getProperty("milestonePassed.$mNum", 'false');
+
+    if ($status =~ m/^(true|on|yes|y|1)$/i) {
+        $milestoneAlreadyPassed[$i] = 1; # Mark as passed in local array
+    } else {
+        $milestoneAlreadyPassed[$i] = 0;
+    }
+}
 
 #-------------------------------------------------------
 # In addition, some local definitions within this script
 #-------------------------------------------------------
+if ($useJdk11)
+{
+#    $ENV{JAVA_HOME} = '/usr/java/jdk-11';
+    $ENV{JAVA_HOME} = '/usr/lib/jvm/java-11';
+
+    $cfg->setProperty('checkstyle.jar',
+        "${pluginHome}/checkstyle-10.7.0/checkstyle-10.7.0-all.jar");
+
+    $cfg->setProperty('checkstyleConfigFile',
+        "${pluginHome}/checkstyle-10.7.0/checkstyle-10.7.0.xml");
+
+    $cfg->setProperty('pmd.lib',
+        "${pluginHome}/pmd-7.21.0/lib");
+
+    $cfg->setProperty('pmdConfigFile',
+        "${pluginHome}/pmd-7.21.0/pmd.xml");
+}
 Web_CAT::Utilities::initFromConfig($cfg);
 if (defined($ENV{JAVA_HOME}))
 {
@@ -332,6 +501,10 @@ if (defined($ENV{JAVA_HOME}))
         "$ENV{JAVA_HOME}" . $Web_CAT::Utilities::FILE_SEPARATOR . "bin"
         . $Web_CAT::Utilities::PATH_SEPARATOR . $ENV{PATH};
 }
+
+# overide TMPDIR to keep temp files local
+$ENV{TMPDIR} = "${workingDir}/local_tmp";
+if (! -d "$ENV{TMPDIR}") { mkdir("$ENV{TMPDIR}"); }
 
 die "ANT_HOME environment variable is not set! (Should come from ANTForPlugins)"
     if !defined($ENV{ANT_HOME});
@@ -373,6 +546,7 @@ my $minCoverageLevel =
 my $coverageGoal =
     $cfg->getProperty('coverageGoal', 100.0);
 if ($coverageGoal <= 0) { $coverageGoal = 100; }
+my $printableCoverageGoal = $coverageGoal;
 if ($coverageGoal >= 1) { $coverageGoal /= 100.0; }
 
 my $useXvfb =
@@ -386,11 +560,23 @@ my $allStudentTestsMustPass =
     $cfg->getProperty('allStudentTestsMustPass', 0);
 $allStudentTestsMustPass =
     ($allStudentTestsMustPass =~ m/^(true|on|yes|y|1)$/i);
+my $includeStudentTestsInGrading =
+    $cfg->getProperty('includeStudentTestsInGrading', 0);
+$includeStudentTestsInGrading =
+    ($includeStudentTestsInGrading =~ m/^(true|on|yes|y|1)$/i);
+my $includeValidationInGrading =
+    $cfg->getProperty('includeValidationInGrading', 0);
+$includeValidationInGrading =
+    ($includeValidationInGrading =~ m/^(true|on|yes|y|1)$/i);
 my $studentsMustSubmitTests =
     $cfg->getProperty('studentsMustSubmitTests', 0);
 $studentsMustSubmitTests =
     ($studentsMustSubmitTests =~ m/^(true|on|yes|y|1)$/i);
-if (!$studentsMustSubmitTests) { $allStudentTestsMustPass = 0; }
+if (!$studentsMustSubmitTests)
+{
+    $allStudentTestsMustPass = 0;
+    $includeStudentTestsInGrading = 0;
+}
 my $includeTestSuitesInCoverage =
     $cfg->getProperty('includeTestSuitesInCoverage', 0);
 $includeTestSuitesInCoverage =
@@ -709,6 +895,19 @@ setClassPatternIfNeeded('staticAnalysisExclude',
     }
 }
 
+# referenceImplementationJar
+{
+    my $jarFileOrDir = $cfg->getProperty('referenceImplementationJar');
+    if (defined $jarFileOrDir && $jarFileOrDir ne "")
+    {
+        my $path = confirmExists($scriptData, $jarFileOrDir);
+        $cfg->setProperty('referenceImplementationClassFiles', $path);
+        if (-d $path)
+        {
+            $cfg->setProperty('referenceImplementationClassDir', $path);
+        }
+    }
+}
 
 # timeout
 my $timeoutForOneRun = $cfg->getProperty('timeoutForOneRun', 30);
@@ -908,7 +1107,7 @@ sub generateCompilerErrorWarningStruct
     $fileName =~ s,\\,/,go;
     my $lineNum = $fileDetails[1];
     my $codeLines = extractAboveBelowLinesOfCode($fileName, $lineNum);
-    $fileName =~ s,^\Q$workingDir/\E,,i;
+    $fileName =~ s,^.*\Q$workingDir/\E,,i;
 
     # For compiler warning we dont have enhanced messages
     # For "cannot find symbol" errors, "addCannotFindSymbolStruct" computes
@@ -1248,6 +1447,8 @@ EOF
         new Web_CAT::JUnitResultsReader("$resultDir/student.inc");
     $status{'instrTestResults'} =
         new Web_CAT::JUnitResultsReader("$resultDir/instr.inc");
+    $status{'validateTestResults'} =
+        new Web_CAT::JUnitResultsReader("$resultDir/validate.inc");
 
     foreach my $class ($status{'studentTestResults'}->suites)
     {
@@ -1281,7 +1482,7 @@ if ($debug)
 
 
 #=============================================================================
-# Load checkstyle and PMD reports into internal data structures
+# Load checkstyle, PMD, and FindBugs reports into internal data structures
 #=============================================================================
 
 # The configuration file for scoring tool messages
@@ -1603,6 +1804,7 @@ sub markStyleSection
 #     violation: the XML::Smart structure referring to the violation
 #                (used for error message printing only)
 #
+my $debugTracking = 0;
 sub trackMessageInstance
 {
     croak 'usage: recordPMDMessageStats(rule, fileName, violation)'
@@ -1615,6 +1817,21 @@ sub trackMessageInstance
     my $deduction = ruleSetting($rule, 'deduction', 0)
         * $toolDeductionScaleFactor;
     my $overLimit = 0;
+
+    if ($debug > 2 || $debugTracking)
+    {
+       print "trackMessageInstance($rule, $fileName, ...)\n";
+        my $msg = $violation->data_pointer(noheader  => 1, nometagen => 1);
+        if (defined $msg)
+        {
+            print $msg;
+        }
+    }
+
+    if ($group eq "suppress")
+    {
+        return;
+    }
 
     if (!$violation->{line}->content
       && $violation->{endline}->content)
@@ -1844,15 +2061,34 @@ if (!$buildFailed) # $can_proceed)
             next if ($file->{name}->null);
             my $fileName = $file->{name}->content;
             $fileName =~ s,\\,/,go;
-            $fileName =~ s,^\Q$workingDir/\E,,i;
+            $fileName =~ s,^.*\Q$workingDir/\E,,i;
             if (!defined $codeMarkupIds{$fileName})
             {
                 $codeMarkupIds{$fileName} = ++$numCodeMarkups;
             }
             if (exists $file->{error})
             {
+                my $serial_version_uid_line = 0;
                 foreach my $violation (@{ $file->{error} })
                 {
+                    if ($violation->{source}->content eq
+                        'com.puppycrawl.tools.checkstyle.checks.naming.ConstantNameCheck')
+                    {
+                      my $msg = $violation->{message}->content;
+                      if (!defined($msg)) { $msg = ''; }
+                      if ($msg =~ m/serial_version_UID/o)
+                      {
+                          $serial_version_uid_line = $violation->{line}->content;
+                          last;
+                      }
+                    }
+                }
+                foreach my $violation (@{ $file->{error} })
+                {
+                    next if (
+                      $serial_version_uid_line > 0
+                      && defined $violation->{line}->content
+                      && $violation->{line}->content == $serial_version_uid_line);
                     my $rule = $violation->{source}->content;
                     $rule =~
                         s/^com\.puppycrawl\.tools\.checkstyle\.checks.*\.//o;
@@ -1875,7 +2111,7 @@ if (!$buildFailed) # $can_proceed)
             next if ($file->{name}->null);
             my $fileName = $file->{name}->content;
             $fileName =~ s,\\,/,go;
-            $fileName =~ s,^\Q$workingDir/\E,,i;
+            $fileName =~ s,^.*\Q$workingDir/\E,,i;
             if (!defined $codeMarkupIds{$fileName})
             {
                 $codeMarkupIds{$fileName} = ++$numCodeMarkups;
@@ -1891,8 +2127,137 @@ if (!$buildFailed) # $can_proceed)
         }
     }
 
+    my $findBugsLog = "$resultDir/findbugs.xml";
+    if (-f $findBugsLog)
+    {
+        my $fb = XML::Smart->new($findBugsLog);
+#        print "parsed findbugs =\n", $fb->data(noheader => 1, nometagen => 1), "\n";
+        # First, pull long error details
+        my %msgs = ();
+        foreach my $pat (@{ $fb->{BugCollection}{BugPattern} })
+        {
+            my $detail = $pat->{Details}->content;
+            $detail =~ s/^\s+|\s+$//gso;
+            $detail =~ s/^<p>\s*|\s*<\/p>$//gso;
+            $detail =~ s/ < / &lt; /go;
+            $detail =~ s/ <= / &lt;= /go;
+            $detail =~ s/ > / &gt; /go;
+            $detail =~ s/ >= / &gt;= /go;
+            $detail =~ s/x&x/x&amp;x/go;
+            $detail = '<p>' . $detail . '</p>';
+            $msgs{$pat->{type}->content} = $detail;
+        }
+        foreach my $bug (@{ $fb->{BugCollection}{BugInstance} })
+        {
+            $bug->{FindBugsCategory} = $bug->{category};
+            $bug->{tool} = 'FindBugs';
+            my $type = $bug->{type}->content;
+            my $msg = '';
+            if (!$bug->{LongMessage}->null)
+            {
+                $msg = $bug->{LongMessage}->content . '.';
+            }
+            elsif (!$bug->{ShortMessage}->null)
+            {
+                $msg = $bug->{ShortMessage}->content . '.';
+            }
+            $msg = htmlEscape($msg);
+
+            # highlight variable name, if there is one
+            my $v = $bug->{LocalVariable}{Message};
+            if (!$v->null)
+            {
+                $v = htmlEscape($v->content);
+                if ($v =~ m/^\s*Did/so)
+                {
+                    $v =~ s/variable\s+(\S+)\?\s*$/variable <code>$1<\/code>?/;
+                    $msg .= ' ' . $v;
+                }
+                elsif ($v =~ m/named\s+(\S+)\s*$/o)
+                {
+                    $v = $1;
+                    $msg =~ s/\Q$v\E/<code>$v<\/code>/g;
+                }
+            }
+
+            # highlight method name, if there is one
+            my $method = $bug->{Method}{Message};
+            if (!$method->null)
+            {
+                $method = htmlEscape($method->content);
+                if ($method =~ m/[Mm]ethod\s+(\S+)\s*$/o)
+                {
+                    $method = $1;
+                    $msg =~ s/\Q$method\E/<code>$method<\/code>/g;
+                }
+            }
+
+            # Add field message, if there is one
+            my $field = $bug->{Field}{Message};
+            if (!$field->null)
+            {
+                my $fmsg = htmlEscape($field->content);
+                if ($fmsg =~ m/^\s*Did/so)
+                {
+                    $fmsg =~ s/field\s+(\S+)\?\s*$/field <code>$1<\/code>?/;
+                    $msg .= ' ' . $fmsg;
+                }
+                elsif ($fmsg =~ m/[Ff]ield\s+(\S+)\s*$/o)
+                {
+                    $fmsg = $1;
+                    $msg =~ s/\Q$fmsg\E/<code>$fmsg<\/code>/g;
+                }
+            }
+
+            my $fileName = '';
+            $bug->{beginline} =
+                $bug->{SourceLine}{start}->content
+                || $bug->{Method}{SourceLine}{start}->content
+                || $bug->{Field}{SourceLine}{start}->content
+                || $bug->{Class}{SourceLine}{start}->content
+                || 1;
+            $bug->{endline} =
+                $bug->{SourceLine}{end}->content
+                || $bug->{Method}{SourceLine}{end}->content
+                || $bug->{Field}{SourceLine}{end}->content
+                || $bug->{Class}{SourceLine}{end}->content
+                || $bug->{beginline}->content;
+            $fileName =
+                $bug->{SourceLine}{sourcepath}->content
+                || $bug->{Method}{SourceLine}{sourcepath}->content
+                || $bug->{Field}{SourceLine}{sourcepath}->content
+                || $bug->{Class}{SourceLine}{sourcepath}->content;
+            $fileName =~ s,\\,/,go;
+            $fileName =~ s,^.*\Q$workingDir/\E,,i;
+            if ($fileName ne '' && ! -f $fileName && -f 'src/' . $fileName)
+            {
+                $fileName = 'src/' . $fileName;
+            }
+            if ($msg ne '') { $msg = '<p>' . $msg . '</p>'; }
+            my $detail = findBugsMessage($type);
+            if ($detail eq '' && defined $msgs{$type})
+            {
+                $detail = $msgs{$type};
+            }
+            $msg .= $detail;
+            if ($msg ne '')
+            {
+                $msg =~ s/&nbsp;/ /go;
+                $bug->{message} = $msg;
+            }
+            # print "parsed rule $type in $fileName:\n";
+            # print $bug->data_pointer(noheader => 1, nometagen => 1), "\n";
+            if ($fileName ne '')
+            {
+                trackMessageInstance($type, $fileName, $bug);
+            }
+        }
+    }
+
     if ($debug > 1)
     {
+       # dump message stats
+       print "==========\ndumping message stats structure\n==========\n";
         my $msg = $messageStats->data(noheader  => 1, nometagen => 1);
         if (defined $msg)
         {
@@ -1978,11 +2343,14 @@ if (!$status{'studentHasSrcs'})
 # set PointsGained in Style section color the radial bar
 if ($maxToolScore > 0)
 {
+    $styleSectionStatus{'pointsGained'} =
+        $maxToolScore - $status{'toolDeductions'};
     $styleSectionStatus{'pointsGainedPercent'} =
         (($maxToolScore - $status{'toolDeductions'})/$maxToolScore) * 100;
 }
 else
 {
+    $styleSectionStatus{'pointsGained'} = 0;
     $styleSectionStatus{'pointsGainedPercent'} = 100;
 }
 
@@ -2025,14 +2393,14 @@ if (defined $status{'studentTestResults'}
         {
             $runtimeScoreWithoutCoverage = 0;
         }
-        else
+        elsif ($includeStudentTestsInGrading)
         {
             $runtimeScoreWithoutCoverage *=
                 $status{'studentTestResults'}->testPassRate;
         }
     }
     $studentCasesPercent =
-        int($status{'studentTestResults'}->testPassRate * 100.0 + 0.5);
+        int($status{'studentTestResults'}->testPassRate * 100.0 * 10 + 0.5) / 10;
     if ($status{'studentTestResults'}->testsFailed > 0
         && $studentCasesPercent == 100)
     {
@@ -2241,7 +2609,7 @@ sub extractExemptLines
 #=============================================================================
 # post-process generated HTML files
 #=============================================================================
-my $jacoco  = (-f "$resultDir/jacoco.xml")
+my $jacoco  = (!$usePit && -f "$resultDir/jacoco.xml")
     ? XML::Smart->new("$resultDir/jacoco.xml")
     : undef;
 
@@ -2279,7 +2647,7 @@ sub computeFileNameUsingClassName
     # pattern we are looking for is "class $className "
     for my $longName (keys %codeMarkupIds)
     {
-        if (checkForPatternInFile($longName, 'class' . ' ' .$className. ' '))
+        if (checkForPatternInFile($longName, 'class' . ' ' . $className . ' '))
         {
             # print "longName from file scan = $longName\n";
             return $longName;
@@ -2322,10 +2690,20 @@ sub computeMethodsUncovered
 
     foreach my $method (@{ $class->{method} })
     {
-        my $counter = $method->{counter}('type', 'eq', 'INSTRUCTION');
+        if (!defined($method->{name}) || $method->{name}->content eq '')
+        {
+            next;
+        }
+        my $counter = $method->{counter}('type', 'eq', 'METHOD');
 
         # print("method: ", $method->{name}->content, "\n");
-        if ($counter->{covered} != 0)
+        if ($counter->{covered} != 0 || !defined($counter->{missed}))
+        {
+            next;
+        }
+
+        $counter = $method->{counter}('type', 'eq', 'INSTRUCTION');
+        if ($counter->{covered} != 0 || !defined($counter->{missed}))
         {
             next;
         }
@@ -2558,6 +2936,124 @@ sub processStatementsUncovered
 }
 
 if (!$buildFailed) # $can_proceed)
+{
+if ($usePit)
+{
+  $gradedElements = 0;
+  $gradedElementsCovered = 0;
+  my $pit  = (-f "$resultDir/mutations.xml")
+    ? XML::Smart->new("$resultDir/mutations.xml")
+    : undef;
+  my %coveredByFile = ();
+  if (defined $pit)
+  {
+    for my $m (@{$pit->{mutations}{mutation}})
+    {
+      my $fileName = $m->{sourceFile};
+      if (! -f $fileName && -f 'src/' . $fileName)
+      {
+        $fileName = 'src/' . $fileName;
+      }
+      $gradedElements++;
+      if (defined $coveredByFile{$fileName})
+      {
+        $coveredByFile{$fileName}{elements}++;
+      }
+      else
+      {
+        $coveredByFile{$fileName} = { elements => 1, elementsCovered => 0 };
+      }
+      if ($m->{detected}->content eq 'true')
+      {
+        $gradedElementsCovered++;
+        $coveredByFile{$fileName}{elementsCovered}++;
+      }
+      else
+      {
+        my $className = $m->{mutatedClass};
+        my $num = $m->{lineNumber};
+        my $desc = $m->{description}->content;
+
+        my $codeMarkupNo;
+        if (defined $codeMarkupIds{$fileName})
+        {
+          $codeMarkupNo = $codeMarkupIds{$fileName};
+        }
+        else
+        {
+          $codeMarkupNo = ++$numCodeMarkups;
+          $codeMarkupIds{$fileName} = $codeMarkupNo;
+        }
+        if (!defined $codeMessages{$fileName})
+        {
+          $codeMessages{$fileName} = {};
+        }
+        my $msgs = $codeMessages{$fileName};
+        if (!defined $msgs->{$num})
+        {
+          $msgs->{$num} = {};
+        }
+        $msgs->{$num}{category} = 'coverage';
+        $msgs->{$num}{coverage} = 'e';
+        if (defined $msgs->{$num}->{message})
+        {
+          $msgs->{$num}->{message} .= '; ' . $desc;
+        }
+        else
+        {
+          $msgs->{$num}->{message} = 'Uncovered mutation(s): ' . $desc;
+        }
+
+      }
+    }
+  }
+  else
+  {
+    $gradedElements = 1;
+  }
+  if ($gradedElements == 0)
+  {
+    # No mutants?
+    $gradedElements = 1;
+    $gradedElementsCovered = 1;
+  }
+
+  # set code markup properties
+  $cfg->setProperty("statElementsLabel", "Mutants Detected");
+  my %fileDeductionProperties = ();
+  my $ptsPerUncovered = 0.0;
+  if ($studentsMustSubmitTests)
+  {
+    if ($gradedElements > 0
+      && $runtimeScoreWithoutCoverage > 0
+      && ($gradedElementsCovered * 1.0 / $gradedElements)
+      < $coverageGoal)
+    {
+      $ptsPerUncovered = -1.0 /
+        $gradedElements
+        * $runtimeScoreWithoutCoverage;
+        # * $coverageGoal;
+    }
+  }
+  for my $fileName (keys %coveredByFile)
+  {
+    my $codeMarkupNo = $codeMarkupIds{$fileName};
+    my $myElements = $coveredByFile{$fileName}{elements};
+    my $myElementsCovered = $coveredByFile{$fileName}{elementsCovered};
+    $cfg->setProperty("codeMarkup${codeMarkupNo}.elements",
+      $myElements);
+    $cfg->setProperty("codeMarkup${codeMarkupNo}.elementsCovered",
+      $myElementsCovered);
+    $cfg->setProperty("codeMarkup${codeMarkupNo}.sourceFileName",
+      $fileName);
+    $cfg->setProperty("codeMarkup${codeMarkupNo}.deductions",
+     ($myElements - $myElementsCovered) * $ptsPerUncovered +
+      0 - $messageStats->{file}->{$fileName}->{pts}->content);
+    $cfg->setProperty("codeMarkup${codeMarkupNo}.remarks",
+      (0 + $messageStats->{file}->{$fileName}->{remarks}->content));
+  }
+}
+else
 {
     if (defined $jacoco)
     {
@@ -3048,8 +3544,8 @@ if (!$buildFailed) # $can_proceed)
             {
                 $ptsPerUncovered = -1.0 /
                     $gradedElements
-                    * $runtimeScoreWithoutCoverage
-                    * $coverageGoal;
+                    * $runtimeScoreWithoutCoverage;
+                    # * $coverageGoal;
             }
             if ($ptsPerUncovered < 0)
             {
@@ -3082,7 +3578,7 @@ if (!$buildFailed) # $can_proceed)
         processStatementsUncovered();
     }
 
-
+}
 }
 $cfg->setProperty('numCodeMarkups', $numCodeMarkups);
 
@@ -3107,7 +3603,14 @@ if ($status{'studentHasSrcs'}
         # Only generate this section if compilation was successful
     if (!defined $status{'studentTestResults'})
     {
+        if ($studentsMustSubmitTests)
+        {
         $sectionTitle .= "<b class=\"warn\">(No Test Results!)</b>";
+        }
+        else
+        {
+        $sectionTitle .= "(No Test Results!)";
+        }
 
         # Mark results in testingSectionStatus as well so that we can fill
         # the radial bar.
@@ -3115,7 +3618,14 @@ if ($status{'studentHasSrcs'}
     }
     elsif ($status{'studentTestResults'}->testsExecuted == 0)
     {
+        if ($studentsMustSubmitTests)
+        {
         $sectionTitle .= "<b class=\"warn\">(No Tests Submitted!)</b>";
+        }
+        else
+        {
+        $sectionTitle .= "(No Tests Submitted!)";
+        }
         $testingSectionStatus{'resultsPercent'} = 0;
     }
     elsif ($status{'studentTestResults'}->allTestsPass)
@@ -3125,7 +3635,14 @@ if ($status{'studentHasSrcs'}
     }
     else
     {
+        if ($studentsMustSubmitTests)
+        {
         $sectionTitle .= "<b class=\"warn\">($studentCasesPercent%)</b>";
+        }
+        else
+        {
+        $sectionTitle .= "($studentCasesPercent%)";
+        }
         $testingSectionStatus{'resultsPercent'} = $studentCasesPercent;
     }
 
@@ -3134,7 +3651,8 @@ if ($status{'studentHasSrcs'}
         ++$expSectionId,
         $status{'studentTestResults'}->allTestsPass);
 
-    if ($allStudentTestsMustPass
+    if ($studentsMustSubmitTests
+        && $allStudentTestsMustPass
         && $status{'studentTestResults'}->testsFailed > 0)
     {
         $status{'feedback'}->print(
@@ -3151,9 +3669,9 @@ if ($status{'studentHasSrcs'}
     # Mark the Errors and Failures flags for the testingSectionStatus.
     $testingSectionStatus{'errors'} = negateValueZeroToOneAndOneToZero(
         checkForPatternInFile("$resultDir/student-results.txt",
-        'Caused an ERROR'));
+        '\bCaused an ERROR\b'));
     $testingSectionStatus{'failures'} = negateValueZeroToOneAndOneToZero(
-        checkForPatternInFile("$resultDir/student-results.txt", 'FAILED'));
+        checkForPatternInFile("$resultDir/student-results.txt", '\bFAILED\b'));
 
     # Access each suite and generate error struct for
     # Testing errors and failures
@@ -3186,16 +3704,17 @@ EOF
     $status{'feedback'}->endFeedbackSection;
     }
 
-    if ($gradedElements > 0
-        || (defined $status{'studentTestResults'}
-            && $status{'studentTestResults'}->testsExecuted > 0))
+    if ($gradedElements > 0)
+#        || (defined $status{'studentTestResults'}
+#            && $status{'studentTestResults'}->testsExecuted > 0))
     {
         $codeCoveragePercent = 0;
         if ($gradedElements > 0)
         {
             $codeCoveragePercent =
                 int(($gradedElementsCovered * 1.0 / $gradedElements)
-                / $coverageGoal * 100.0 + 0.5);
+                # / $coverageGoal
+                * 100.0 * 10 + 0.5) / 10;
             if ($codeCoveragePercent > 100) { $codeCoveragePercent = 100; }
             if (($gradedElementsCovered * 1.0 / $gradedElements) < $coverageGoal
                 && $codeCoveragePercent == 100)
@@ -3210,16 +3729,17 @@ EOF
 
         if (!$useEnhancedFeedback)
         {
-        $sectionTitle = "Code Coverage from Your Tests ";
+        $sectionTitle = ($usePit ? "Mutants Detected by" : "Code Coverage from")
+            . " Your Tests ";
         if ($gradedElements == 0)
         {
             $sectionTitle .= "<b class=\"warn\">(No Coverage!)</b>";
         }
-        elsif (($gradedElementsCovered * 1.0 / $gradedElements)
-            >= $coverageGoal)
-        {
-            $sectionTitle .= "(100%)";
-        }
+#         elsif (($gradedElementsCovered * 1.0 / $gradedElements)
+#             >= $coverageGoal)
+#         {
+#             $sectionTitle .= "(100%)";
+#         }
         else
         {
             $sectionTitle .= "<b class=\"warn\">($codeCoveragePercent%)</b>";
@@ -3228,7 +3748,8 @@ EOF
         $status{'feedback'}->startFeedbackSection(
             $sectionTitle, ++$expSectionId, 1);
 
-        $status{'feedback'}->print("<p><b>Code Coverage: ");
+        $status{'feedback'}->print("<p><b>" .
+          ($usePit ? "Mutants Detected" : "Code Coverage") .": ");
         if ($codeCoveragePercent < 100)
         {
             $status{'feedback'}->print(
@@ -3241,9 +3762,10 @@ EOF
 
         my $descr = $cfg->getProperty("statElementsLabel", "Methods Executed");
         $descr =~ tr/A-Z/a-z/;
-        $descr =~ s/\s*executed\s*$//;
+        $descr =~ s/\s*Detected\s*$/ detected/;
+        $descr =~ s/\s*executed\s*$/ exercised/;
         $status{'feedback'}->print(<<EOF);
-</b> (percentage of $descr exercised by your tests)</p>
+</b> (percentage of $descr by your tests)</p>
 <p>You can improve your testing by looking for any
 <span style="background-color:#F0C8C8">lines highlighted in this color</span>
 in your code listings above.  Such lines have not been sufficiently
@@ -3264,6 +3786,11 @@ if (defined $status{'instrTestResults'}
     && $status{'instrTestResults'}->hasResults)
 {
     $status{'instrTestResults'}->saveToCfg($cfg, 'instructor.test');
+}
+if (defined $status{'validateTestResults'}
+    && $status{'validateTestResults'}->hasResults)
+{
+    $status{'validateTestResults'}->saveToCfg($cfg, 'validate.test');
 }
 if (defined $messageStats)
 {
@@ -3316,7 +3843,7 @@ if (defined $messageStats)
     $cfg->setProperty('static.analysis.results', '(' . $staticResults . ')');
 }
 $cfg->setProperty('outcomeProperties',
-    '("instructor.test.results", "student.test.results", '
+    '("instructor.test.results", "student.test.results", "validate.test.results, '
     . '"static.analysis.results")');
 
 
@@ -3358,6 +3885,7 @@ sub markCodingSectionUsingInstrResults
 #=============================================================================
 # generate reference test results
 #=============================================================================
+my $HCV = 0;
 if (defined $status{'instrTestResults'})
 {
     my $sectionTitle = "Estimate of Problem Coverage ";
@@ -3377,7 +3905,7 @@ if (defined $status{'instrTestResults'})
     else
     {
         $instructorCasesPercent =
-            int($status{'instrTestResults'}->testPassRate * 100.0 + 0.5);
+            int($status{'instrTestResults'}->testPassRate * 100.0 * 10 + 0.5) / 10;
         if ($instructorCasesPercent == 100)
         {
             # Don't show 100% if some cases failed
@@ -3448,6 +3976,7 @@ EOF
     {
         my $hints = $status{'instrTestResults'}->formatHints(
             1, $hintsLimit);
+        if ($hints =~ /HCV/) { $HCV = 1; }
         # print "hints = $hints\n";
         if (defined $hints && $hints ne "" && $hints =~ /honor code viol/i)
         {
@@ -3593,6 +4122,7 @@ EOF
                 ? $status{'instrTestResults'}->formatAllTestOutcomes
                 : $status{'instrTestResults'}->formatHints(
                     0, $hintsLimit);
+            if ($hints =~ /HCV/) { $HCV = 1; }
             if ($showAllTestOutcomes) { $allTestOutcomeResults = $hints; }
             # print "hints = $hints\n";
             my $label = $showAllTestOutcomes
@@ -3644,11 +4174,11 @@ EOF
         # Mark Behavior Section Status appropriately
         $behaviorSectionStatus{'errors'} = negateValueZeroToOneAndOneToZero(
             checkForPatternInFile(
-            "$resultDir/instr-results.txt", 'Caused an ERROR'));
+            "$resultDir/instr-results.txt", '\bCaused an ERROR\b'));
 
         $behaviorSectionStatus{'failures'} = negateValueZeroToOneAndOneToZero(
             checkForPatternInFile(
-            "$resultDir/instr-results.txt", 'FAILED'));
+            "$resultDir/instr-results.txt", '\bFAILED\b'));
 
         markBehaviorSectionUsingInstrTests();
         markCodingSectionUsingInstrResults();
@@ -3688,6 +4218,505 @@ EOF
         $status{'instrFeedback'}->endFeedbackSection;
         }
     }
+}
+
+#=============================================================================
+# generate test validation results
+#=============================================================================
+if (defined $status{'validateTestResults'} && $useTestCaseValidation)
+{
+    my $sectionTitle = "Detailed Test Validation Results";
+    if ($status{'validateTestResults'}->testsExecuted == 0
+        || ($studentsMustSubmitTests
+            && !$status{'studentTestResults'}->hasResults))
+    {
+        $sectionTitle .=
+            "<b class=\"warn\">(Unknown!)</b>";
+        $validateCasesPercent = "unknown";
+    }
+    elsif ($status{'validateTestResults'}->allTestsPass)
+    {
+        $sectionTitle .= "(100%)";
+        $validateCasesPercent = 100;
+    }
+    else
+    {
+        $validateCasesPercent =
+            int($status{'validateTestResults'}->testPassRate * 100.0 * 10 + 0.5) / 10;
+        if ($validateCasesPercent == 100)
+        {
+            # Don't show 100% if some cases failed
+            $validateCasesPercent--;
+        }
+        $sectionTitle .= "<b class=\"warn\">($validateCasesPercent%)</b>";
+    }
+
+    if ($showTestCaseValidation)
+    {
+    $status{'feedback'}->startFeedbackSection(
+        $sectionTitle, ++$expSectionId,
+        $useEnhancedFeedback || ($validateCasesPercent >= 100));
+    $status{'feedback'}->print("<p><b>Valid Test Percentage: ");
+    if ($validateCasesPercent == 100)
+    {
+        $status{'feedback'}->print("100%");
+    }
+    else
+    {
+        $status{'feedback'}->print(
+            "<b class=\"warn\">$validateCasesPercent");
+        if ($validateCasesPercent ne "unknown")
+        {
+            $status{'feedback'}->print("%");
+        }
+        $status{'feedback'}->print("</b>");
+    }
+    $status{'feedback'}->print("</b></p>");
+
+    if ($status{'compileErrs'}) # $validateCases == 0
+    {
+        $status{'feedback'}->print(<<EOF);
+<p><b class="warn">Your Specification Tests failed to compile correctly against
+the reference implementation.</b></p>
+<p>This is most likely because you have not followed the correct format
+for the specification tests (using only methods defined in the interface).</p>
+<p>Failure to follow these constraints will prevent the proper assessment
+of your solution and your tests.</p>
+EOF
+        if ($status{'compileMsgs'} ne "")
+        {
+            $status{'feedback'}->print(<<EOF);
+<p>The following specific error(s) were discovered while compiling
+your specification tests against the reference implementation:</p>
+</p>
+<pre>
+EOF
+            $status{'feedback'}->print($status{'compileMsgs'});
+            $status{'feedback'}->print("</pre>\n");
+        }
+    }
+    elsif ($studentsMustSubmitTests
+        && !$status{'studentTestResults'}->hasResults)
+    {
+        $status{'feedback'}->print(<<EOF);
+<p><b class="warn">You are required to write your own software tests
+for this assignment.  You must provide your own tests
+to get further feedback.</b></p>
+EOF
+    }
+    elsif ($status{'validateTestResults'}->allTestsFail)
+    {
+        $status{'feedback'}->print(<<EOF);
+<p><b class="warn">Your problem setup does not appear to be
+consistent with the assignment.</b></p>
+EOF
+        if ($studentsMustSubmitTests)
+        {
+            $status{'feedback'}->print(<<EOF);
+<p>For this assignment, your test cases are being assessed by running
+your tests against the reference solution.</p>
+EOF
+        }
+        $status{'feedback'}->print(<<EOF);
+<p>In this case, <b>none of your specification tests pass</b> on the reference
+solution, which may mean that your specification tests make incorrect
+assumptions about some aspect of the required behavior. This discrepancy prevented
+Web-CAT from properly assessing the thoroughness of your test cases.</p>
+<p>Double check that you have carefully followed all initial conditions
+requested in the assignment in setting up your test cases.</p>
+EOF
+
+    }
+    elsif ($status{'validateTestResults'}->allTestsPass)
+    {
+        $status{'feedback'}->print(<<EOF);
+<p>Your tests appear to match the expectations for this assignment since none expect
+outputs that conflict with the reference implementation.</p>
+EOF
+    }
+    else
+    {
+        if ($studentsMustSubmitTests)
+        {
+            $status{'feedback'}->print(<<EOF);
+<p>For this assignment, your test cases are being assessed by running
+your tests against the reference solution.</p>
+<p>Some of your tests fail when run against the reference implementation.</p>
+<p>This happens when your test cases embody misconceptions of the problem
+spec by expecting different output from what the reference implementation
+generates for this that test case.
+<p>Your test cases contain misconceptions of the problem spec, so your
+testing is incomplete.</p>
+EOF
+        }
+        $status{'feedback'}->print(<<EOF);
+<p>Double check that you have carefully followed all requirements of the
+assignment when setting up your tests.</p>
+EOF
+    }
+    if ($hintsLimit != 0 && !$status{'compileErrs'})
+    {
+        if ($studentsMustSubmitTests
+            && $hasJUnitErrors
+            && $junitErrorsHideHints)
+        {
+            $status{'feedback'}->print(<<EOF);
+<p>Your JUnit test classes contain <b class="warn">problems that must be
+fixed</b> before you can receive any more specific feedback.  Be sure that
+all of your test classes contain test methods, and that all of your test
+methods include appropriate assertions to check for expected behavior.
+You must fix these problems with your own tests to get further feedback.</p>
+EOF
+        }
+    }
+
+    {
+        if ($codingSectionStatus{'compilerErrors'} == 1)
+        {
+        # Transform the plain text JUnit results into an interactive HTML
+        # view.
+        JavaTddPlugin::transformTestResults('validate_',
+            "$resultDir/validate-results.txt",
+            "$resultDir/validate-results.html"
+            );
+        }
+
+        if ($codingSectionStatus{'compilerErrors'} == 1)
+        {
+        open(VALIDATERESULTS, "$resultDir/validate-results.html");
+        my @lines = <VALIDATERESULTS>;
+        close(VALIDATERESULTS);
+        if ($#lines >= 0)
+        {
+            $status{'feedback'}->print(<<EOF);
+<p>The results of running your test cases are shown
+below. Click on a failed test to see the reason for the failure and an
+execution trace that shows where the error occurred.</p>
+EOF
+            $status{'feedback'}->print(@lines);
+        }
+        unlink "$resultDir/validate-results.html";
+
+        @lines = linesFromFile("$resultDir/validate-out.txt", 75000, 4000);
+        if ($#lines >= 0)
+        {
+            $status{'feedback'}->startFeedbackSection(
+                "Output from your tests", ++$expSectionId, 1, 2,
+                "<pre>", "</pre>");
+            $status{'feedback'}->print(@lines);
+            $status{'feedback'}->endFeedbackSection;
+        }
+        $status{'feedback'}->endFeedbackSection;
+        }
+    }
+    }
+}
+
+
+#=============================================================================
+# generate milestone results
+#=============================================================================
+@milestoneResults = ();
+for (my $i = 0; $i < $milestoneCount; $i++)
+{
+    my $mNum = defined($milestoneNumbers[$i]) ? $milestoneNumbers[$i] : ($i + 1);
+    my $dueDate = $milestoneDueDatesTimestamps[$i];
+    my $reqStudentTests = $milestoneMinStudentTests[$i] // 0;
+    my $reqRefTests = $milestoneMinRefTests[$i] // 0;
+    my $reqCover = $milestoneMinMutationCoverages[$i] // 0;
+    my $reqStyle = $milestoneStyleMins[$i] // 0;
+
+    my $actualStudentTests = 0;
+    my $actualRefTests = 0;
+    my $actualCoverage = 0;
+    my $actualStyle = 0;
+    my @details = ();
+    my $met = 1;
+
+    if (defined $status{'validateTestResults'})
+    {
+        $actualStudentTests = $status{'validateTestResults'}->testsExecuted
+            - $status{'validateTestResults'}->testsFailed;
+    }
+
+    if (defined $status{'instrTestResults'})
+    {
+        $actualRefTests = $status{'instrTestResults'}->testsExecuted
+            - $status{'instrTestResults'}->testsFailed;
+    }
+
+    if (defined $testingSectionStatus{'codeCoveragePercent'})
+    {
+        $actualCoverage = $testingSectionStatus{'codeCoveragePercent'};
+    }
+
+    if (defined $styleSectionStatus{'pointsGainedPercent'})
+    {
+        $actualStyle = defined $styleSectionStatus{'pointsGained'}
+            ? $styleSectionStatus{'pointsGained'}
+            : $styleSectionStatus{'pointsGainedPercent'};
+    }
+
+    my $subTime = $cfg->getProperty('submissionTimestamp', 0);
+    my $dueMet = 1;
+    my $dueExpected = 'Not required';
+    my $dueActual = 'No due date';
+
+    if (defined($dueDate) && $dueDate > 0)
+    {
+        $dueExpected = formatTimestampForDisplay($dueDate);
+        $dueActual = formatTimestampForDisplay($subTime);
+
+        if (defined $subTime && $subTime ne '' && $subTime =~ /^\d+$/
+            && $subTime > $dueDate)
+        {
+            $dueMet = 0;
+        }
+    }
+
+    push @details, {
+        name     => 'Due Date',
+        met      => $dueMet,
+        expected => $dueExpected,
+        actual   => $dueActual
+    };
+    $met = 0 unless $dueMet;
+
+    my $studentMet = 1;
+    my $studentExpected = 'Not required';
+    if ($reqStudentTests > 0)
+    {
+        $studentExpected = ">= $reqStudentTests";
+        $studentMet = ($actualStudentTests >= $reqStudentTests);
+        $met = 0 unless $studentMet;
+    }
+    push @details, {
+        name     => 'Student Tests',
+        met      => $studentMet,
+        expected => $studentExpected,
+        actual   => $actualStudentTests
+    };
+
+    my $refMet = 1;
+    my $refExpected = 'Not required';
+    if ($reqRefTests > 0)
+    {
+        $refExpected = ">= $reqRefTests";
+        $refMet = ($actualRefTests >= $reqRefTests);
+        $met = 0 unless $refMet;
+    }
+    push @details, {
+        name     => 'Reference Tests',
+        met      => $refMet,
+        expected => $refExpected,
+        actual   => $actualRefTests
+    };
+
+    my $coverMet = 1;
+    my $coverExpected = 'Not required';
+    my $coverActual = sprintf('%.1f%%', $actualCoverage);
+    if ($reqCover > 0)
+    {
+        $coverExpected = ">= $reqCover%";
+        $coverMet = ($actualCoverage >= $reqCover);
+        $met = 0 unless $coverMet;
+    }
+    push @details, {
+        name     => 'Mutation Coverage',
+        met      => $coverMet,
+        expected => $coverExpected,
+        actual   => $coverActual
+    };
+
+    my $styleMet = 1;
+    my $styleExpected = 'Not required';
+    my $styleActual = sprintf('%g', $actualStyle);
+    if ($reqStyle > 0)
+    {
+        $styleExpected = ">= $reqStyle";
+        $styleMet = ($actualStyle >= $reqStyle);
+        $met = 0 unless $styleMet;
+    }
+    push @details, {
+        name     => 'Style Points',
+        met      => $styleMet,
+        expected => $styleExpected,
+        actual   => $styleActual
+    };
+
+    push @milestoneResults, {
+        id      => "milestone$mNum",
+        name    => "Milestone $mNum",
+        met     => $met,
+        details => \@details
+    };
+}
+
+if ($milestoneCount > 0)
+{
+    my $totalMilestones = scalar @milestoneResults;
+    my $milestonesPassed = 0;
+
+    foreach my $milestoneResult (@milestoneResults)
+    {
+        $milestonesPassed++ if $milestoneResult->{met};
+    }
+
+    # Fallback to properties if detailed milestone results were not built.
+    if ($totalMilestones == 0)
+    {
+        for (my $i = 1; $i <= 20; $i++)
+
+        {
+            my $passedProp = $cfg->getProperty("milestonePassed.$i");
+            if (defined $passedProp)
+            {
+                $totalMilestones++;
+                if ($passedProp eq 'true' || $passedProp eq '1')
+                {
+                    $milestonesPassed++;
+                }
+            }
+        }
+    }
+
+    my $sectionTitle = "Milestone Progress";
+    my $milestonePercent = 0;
+    my $milestonePercentKnown = 1;
+
+    if ($totalMilestones == 0)
+    {
+        $sectionTitle .= " <b class=\"warn\">(Unknown!)</b>";
+        $milestonePercentKnown = 0;
+    }
+    elsif ($milestonesPassed >= $totalMilestones)
+    {
+        $sectionTitle .= " (100%)";
+        $milestonePercent = 100;
+    }
+    else
+    {
+        $milestonePercent =
+            int(($milestonesPassed / $totalMilestones) * 100.0 * 10 + 0.5) / 10;
+        if ($milestonePercent == 100)
+        {
+            # Don't show 100% if some milestones failed
+            $milestonePercent--;
+        }
+        $sectionTitle .= " <b class=\"warn\">($milestonePercent%)</b>";
+    }
+
+    $status{'feedback'}->startFeedbackSection(
+        $sectionTitle, ++$expSectionId,
+        $useEnhancedFeedback
+            || ($milestonePercentKnown && $milestonePercent >= 100));
+    $status{'feedback'}->print("<p>Milestones Met: ");
+    if ($totalMilestones == 0)
+    {
+        $status{'feedback'}->print("<b class=\"warn\">Unknown</b>");
+    }
+    elsif ($milestonePercent == 100)
+    {
+        $status{'feedback'}->print("<b>$milestonesPassed/$totalMilestones</b>");
+    }
+    else
+    {
+        $status{'feedback'}->print(
+            "<b class=\"warn\">$milestonesPassed/$totalMilestones");
+        $status{'feedback'}->print("</b>");
+    }
+    $status{'feedback'}->print("</p>");
+
+    if ($totalMilestones == 0)
+    {
+        $status{'feedback'}->print(<<EOF);
+<p><b class="warn">No milestone configuration was detected.</b></p>
+<p>This assignment may not have milestones configured, or the milestone
+properties could not be found.</p>
+EOF
+    }
+    elsif ($milestonePercentKnown && $milestonePercent >= 100)
+    {
+        $status{'feedback'}->print(<<EOF);
+<p>Congratulations! You have met all <b>$totalMilestones</b> milestones for this assignment.</p>
+EOF
+    }
+    else
+    {
+        $status{'feedback'}->print(<<EOF);
+<p>You have met <b class="warn">$milestonesPassed out of $totalMilestones</b> milestones.
+Review the details below to see which requirements need to be addressed.</p>
+EOF
+    }
+
+    # Display detailed milestone information
+    if ($totalMilestones > 0)
+    {
+        $status{'feedback'}->print(
+            "<p>The following milestones are defined for this assignment:</p>\n");
+
+        if (@milestoneResults)
+        {
+            printMilestoneFeedbackDetails($status{'feedback'}, \@milestoneResults);
+        }
+        else
+        {
+            # Fallback when no detailed milestone results are available: show requirements only
+            $status{'feedback'}->print("<ul class=\"checklist\">\n");
+            for (my $i = 1; $i <= $totalMilestones; $i++)
+            {
+                my $dueDateProp     = $cfg->getProperty("milestoneDueDate.$i", '0');
+                my $dueTimeProp     = $cfg->getProperty("milestoneDueTime.$i", '0');
+                my $passed         = $cfg->getProperty("milestonePassed.$i", 'false');
+                my $mutationCovMin = $cfg->getProperty("milestoneMinMutationCoverage.$i", '0');
+                my $studentTestMin = $cfg->getProperty("milestoneMinStudentTests.$i", '0');
+                my $refTestMin     = $cfg->getProperty("milestoneMinRefTests.$i", '0');
+                my $styleMin       = $cfg->getProperty("milestoneStyleMin.$i", '0');
+
+                next unless milestoneHasConfiguredRequirements(
+                    $dueDateProp, $dueTimeProp, $studentTestMin,
+                    $refTestMin, $styleMin, $mutationCovMin);
+
+                my $class      = ($passed eq 'true' || $passed eq '1') ? 'complete' : 'incomplete';
+                my $statusText = ($passed eq 'true' || $passed eq '1') ? 'Met' : 'Not Met';
+
+                $status{'feedback'}->print("<li class=\"$class\">Milestone $i: $statusText");
+
+                if ($mutationCovMin > 0
+                    || $studentTestMin > 0
+                    || $refTestMin > 0
+                    || $styleMin > 0)
+                {
+                    $status{'feedback'}->print("<ul class=\"checklist\">");
+                    if ($studentTestMin > 0)
+                    {
+                        $status{'feedback'}->print(
+                            "<li class=\"incomplete\">Minimum Student Tests: $studentTestMin</li>");
+                    }
+                    if ($refTestMin > 0)
+                    {
+                        $status{'feedback'}->print(
+                            "<li class=\"incomplete\">Minimum Reference Tests: $refTestMin</li>");
+                    }
+                    if ($mutationCovMin > 0)
+                    {
+                        $status{'feedback'}->print(
+                            "<li class=\"incomplete\">Minimum Mutation Coverage: $mutationCovMin%</li>");
+                    }
+                    if ($styleMin > 0)
+                    {
+                        $status{'feedback'}->print(
+                                "<li class=\"incomplete\">Minimum Style Points: $styleMin</li>");
+                    }
+                    $status{'feedback'}->print("</ul>");
+                }
+
+                $status{'feedback'}->print("</li>\n");
+            }
+            $status{'feedback'}->print("</ul>\n");
+        }
+    }
+    $status{'feedback'}->endFeedbackSection;
 }
 
 
@@ -3827,6 +4856,9 @@ sub generateCompleteErrorStruct
     my $errorMessage = shift;
     my $enhancedMessage = shift || '';
 
+    carp "no line number provided"
+        if !defined($lineNum) || $lineNum eq '';
+
     my $codeLines = extractAboveBelowLinesOfCode($fileName, $lineNum);
 
     my $errorStruct = expandedMessage->new(
@@ -3870,7 +4902,10 @@ foreach my $ff (keys %codeMessages)
                      #print $c->{rule}->content;
                      #print("\n");
 
-                 my $lineNum = $c->{line}->content;
+                 my $lineNum =
+                     $c->{line}->null
+                     ? $c->{beginline}->content
+                     : $c->{line}->content;
 
                  # This is the case of "TestsHaveAssertions" rule from pmd
                  # where beginline is the one which contains the declaration
@@ -3880,6 +4915,12 @@ foreach my $ff (keys %codeMessages)
                      && $c->{beginline}->content)
                  {
                      $lineNum = $c->{beginline}->content;
+                 }
+
+                 if (!defined($lineNum) || $lineNum eq '' )
+                 {
+                      print "no line number found in:\n",
+                          $c->data_pointer(noheader => 1, nometagen => 1), "\n";
                  }
 
                  my $codingStyleStruct = generateCompleteErrorStruct(
@@ -4167,6 +5208,197 @@ sub computeBehaviorSectionSignatureStructs
     my @instrSuites = $status{'instrTestResults'}->listOfHashes;
 
     for my $suite (@instrSuites)
+    {
+        # Implies this test passed
+        if ($suite->{'level'} == 1)
+        {
+            next;
+        }
+
+        # Assertion Failures
+        if ($suite->{'level'} == 2)
+        {
+            if (defined $signatureErrorFailureMessages{$suite->{'message'}})
+            {
+                next;
+            }
+            else
+            {
+                $signatureErrorFailureMessages{$suite->{'message'}} = 1;
+            }
+
+            my $assertionStruct = generateHintErrorStruct($suite->{'message'});
+
+            # note that the key is 'behaviorFailures', so that there is no
+            # conflict with 'failures' which is key for testing
+            addErrorFailureStructToHash(
+                'behaviorFailures', 'behaviorFailures', $assertionStruct);
+            next;
+        }
+
+        # Signature Errors
+        if ($suite->{'level'} == 4 && $suite->{'code'} == 29)
+        {
+            if (defined $signatureErrorFailureMessages{$suite->{'message'}})
+            {
+                next;
+            }
+            else
+            {
+                $signatureErrorFailureMessages{$suite->{'message'}} = 1;
+            }
+
+            my $fileName;
+            my $lineNum;
+            my $signatureErrorStruct;
+
+            ($fileName, $lineNum) =
+                extractFileNameFromStackTrace($suite->{'trace'}, 0);
+
+            if (!defined $fileName || !defined $lineNum)
+            {
+                $signatureErrorStruct =
+                    generateHintErrorStruct($suite->{'message'});
+            }
+            else
+            {
+                $signatureErrorStruct = generateCompleteErrorStruct(
+                    $fileName, $lineNum, $suite->{'message'});
+            }
+
+            addErrorFailureStructToHash('signatureErrors', 'signatureErrors',
+                $signatureErrorStruct);
+            next;
+        }
+
+        # StackOverflowError
+        if ($suite->{'level'} == 4 && $suite->{'code'} == 32)
+        {
+            my $stackOverflowErrorStruct;
+            $stackOverflowErrorStruct =
+                generateStackOverflowErrorStruct($suite->{'trace'});
+
+            if (!defined $stackOverflowErrorStruct)
+            {
+                $stackOverflowErrorStruct =
+                    generateHintErrorStruct($suite->{'message'});
+            }
+
+            addErrorFailureStructToHash(
+                'stackOverflowErrors',
+                'stackOverflowErrors',
+                $stackOverflowErrorStruct);
+            next;
+        }
+
+        # OutOfMemoryError
+        if ($suite->{'level'} == 4 && $suite->{'code'} == 31)
+        {
+            my $fileName;
+            my $lineNum;
+            my $outOfMemoryStruct;
+
+            ($fileName, $lineNum) =
+                extractFileNameFromStackTrace($suite->{'trace'}, 1);
+
+            if (!defined $fileName || !defined $lineNum)
+            {
+                $outOfMemoryStruct =
+                    generateHintErrorStruct($suite->{'message'});
+            }
+            else
+            {
+                $outOfMemoryStruct = generateCompleteErrorStruct(
+                    $fileName, $lineNum, $suite->{'message'});
+            }
+
+            addErrorFailureStructToHash(
+                'outOfMemoryErrors', 'outOfMemoryErrors', $outOfMemoryStruct);
+            next;
+        }
+
+        # Test Timedout
+        if ($suite->{'level'} == 5
+            && index(lc($suite->{'trace'}), lc('TestTimedOutException'))
+            != -1)
+        {
+            my $testsTakeLongStruct =
+                generateHintErrorStruct($suite->{'message'});
+
+            addErrorFailureStructToHash(
+                'testsTakeTooLong', 'testsTakeTooLong', $testsTakeLongStruct);
+            next;
+        }
+
+        my $fileName;
+        my $lineNum;
+        my $errorStruct;
+        my $message = $suite->{'message'};
+
+        if (defined $suite->{'exception'})
+        {
+            my $exName = $suite->{'exception'};
+            $exName =~ s/^.*\.//o;
+            $message = $exName . ': ' . $message;
+        }
+
+        ($fileName, $lineNum) =
+            extractFileNameFromStackTrace($suite->{'trace'}, 1);
+
+        if (!defined $lineNum)
+        {
+            if (defined $signatureErrorFailureMessages{$message})
+            {
+                next;
+            }
+            else
+            {
+                $signatureErrorFailureMessages{$message} = 1;
+            }
+        }
+        else
+        {
+            if (defined $signatureErrorFailureMessages{$message.$lineNum})
+            {
+                next;
+            }
+            else
+            {
+                $signatureErrorFailureMessages{$message.$lineNum} = 1;
+            }
+        }
+
+        if (!defined $fileName || !defined $lineNum)
+        {
+            $errorStruct = generateHintErrorStruct($message);
+        }
+        else
+        {
+            $errorStruct = generateCompleteErrorStruct(
+                $fileName, $lineNum, $message);
+        }
+
+        # note that the key is 'behaviorErrors', so that there is no conflict
+        # with 'errors' which is key for testing
+        if (!defined $suite->{'exception'})
+        {
+            addErrorFailureStructToHash(
+                'behaviorErrors', $message, $errorStruct);
+        }
+        else
+        {
+            addErrorFailureStructToHash(
+                'behaviorErrors', $suite->{'exception'}, $errorStruct);
+        }
+    }
+}
+
+# Suites from validate.inc
+sub computeBehaviorSectionSignatureStructsValidate
+{
+    my @validateSuites = $status{'validateTestResults'}->listOfHashes;
+
+    for my $suite (@validateSuites)
     {
         # Implies this test passed
         if ($suite->{'level'} == 1)
@@ -4809,8 +6041,11 @@ if ($studentsMustSubmitTests)
 {
     if ($gradedElements > 0)
     {
-        my $multiplier = $gradedElementsCovered * 1.0 / $gradedElements
-            / $coverageGoal;
+        my $multiplier = $gradedElementsCovered * 1.0 / $gradedElements;
+        if ($multiplier >= $coverageGoal)
+        {
+           $multiplier = 1.0;
+        }
         if ($multiplier * 100.0 < $minCoverageLevel)
         {
             # print "multiplier = $multiplier\n";
@@ -4829,6 +6064,24 @@ if ($studentsMustSubmitTests)
 
 print "score with coverage: $runtimeScore ($gradedElementsCovered "
     . "elements / $gradedElements covered)\n" if ($debug > 2);
+
+if ($includeValidationInGrading)
+{
+    my $validationTestCount = $status{'validateTestResults'}->testsExecuted;
+    $validationPenalty = $maxValidationPenalty;
+    if ($validationTestCount >= $validationTestsRequired)
+    {
+        my $testsPassed   = $status{'validateTestResults'}->testsExecuted - $status{'validateTestResults'}->testsFailed;
+        my $effectiveTests = $validationTestCount > $validationFailuresAllowed ? $validationTestCount - $validationFailuresAllowed : 0;
+        my $effectivePassRate = $effectiveTests > 0 ? $testsPassed / $effectiveTests : 1.0;
+        $validationPenalty = $maxValidationPenalty * (1 - ($effectivePassRate > 1.0 ? 1.0 : $effectivePassRate));
+
+        # $validationPenalty = $maxValidationPenalty * (1 - $status{'validateTestResults'}->testPassRate);
+    }
+    $runtimeScore -= $validationPenalty;
+    if ($runtimeScore < 0) { $runtimeScore = 0; }
+    $printableValidationPenalty = int($validationPenalty * 10 + 0.5) / 10;
+}
 
 # Total them up
 # my $rawScore = $can_proceed
@@ -4913,7 +6166,7 @@ EOF
 #=============================================================================
 # generate score explanation for student
 #=============================================================================
-if ($can_proceed && $studentsMustSubmitTests)
+if ($can_proceed && $studentsMustSubmitTests && !$useEMRN)
 {
     my $scoreToTenths = int($runtimeScore * 10 + 0.5) / 10;
     my $possible = int($maxCorrectnessScore * 10 + 0.5) / 10;
@@ -4922,19 +6175,60 @@ if ($can_proceed && $studentsMustSubmitTests)
         . "($scoreToTenths/$possible)",
         ++$expSectionId,
         1);
+    my $covLabel = ($usePit ? "Mutants detected by" : "Code coverage from");
     $status{'feedback'}->print(<<EOF);
 <table style="border:none">
 <tr><td><b>Results from running your tests:</b></td>
 <td class="n">$studentCasesPercent%</td></tr>
-<tr><td><b>Code coverage from your tests:</b></td>
+<tr><td><b>$covLabel your tests:</b></td>
 <td class="n">$codeCoveragePercent%</td></tr>
+EOF
+    if ($coverageGoal < 1)
+    {
+    $status{'feedback'}->print(<<EOF);
+<tr><td><b>Coverage goal for full credit:</b></td>
+<td class="n">$printableCoverageGoal%</td></tr>
+EOF
+    }
+    if ($includeValidationInGrading)
+    {
+        $status{'feedback'}->print(<<EOF);
+<tr><td><b>Results from test case validation</b></td>
+<td class="n">$validateCasesPercent%</td></tr>
+EOF
+    }
+    $status{'feedback'}->print(<<EOF);
 <tr><td><b>Estimate of problem coverage:</b></td>
 <td class="n">$instructorCasesPercent%</td></tr>
+EOF
+    if ($includeValidationInGrading)
+    {
+        $status{'feedback'}->print(<<EOF);
+<tr><td><b>Penalty from test validation</b></td>
+<td class="n">$printableValidationPenalty</td></tr>
+EOF
+    }
+$status{'feedback'}->print(<<EOF);
 <tr><td colspan="2">score =
-$studentCasesPercent%
-* $codeCoveragePercent%
+EOF
+    if ($includeStudentTestsInGrading)
+    {
+        $status{'feedback'}->print(" $studentCasesPercent% * ");
+    }
+    $status{'feedback'}->print("$codeCoveragePercent% ");
+#    if ($coverageGoal < 1)
+#    {
+#        $status{'feedback'}->print("/ $printableCoverageGoal% ");
+#    }
+    $status{'feedback'}->print(<<EOF);
 * $instructorCasesPercent%
 * $maxCorrectnessScore
+EOF
+    if ($includeValidationInGrading)
+    {
+        $status{'feedback'}->print(" - $printableValidationPenalty ");
+    }
+$status{'feedback'}->print(<<EOF);
 points possible = $scoreToTenths</p>
 </table>
 <p>Full-precision (unrounded) percentages are used to calculate
@@ -5086,9 +6380,291 @@ if ($rowOpened)
 # Update and rewrite properties to reflect status
 #=============================================================================
 
+sub smartHtmlEscapeAndPeel
+{
+    my $msg = smartHtmlEscape(shift);
+
+    if (defined $msg)
+    {
+        $msg =~ s/^\s*<[Pp](\s+[^>]*)?>//o;
+        $msg =~ s/\s*<\/[Pp]>\s*$//o;
+    }
+
+    return $msg;
+}
+
+sub loadMilestoneConfigData
+{
+    my ($configPath) = @_;
+
+    return [] unless defined $configPath && $configPath ne '' && -e $configPath;
+
+    my $jsonText = '';
+    if (open(my $fh, '<', $configPath))
+    {
+        local $/;
+        $jsonText = <$fh>;
+        close($fh);
+    }
+    else
+    {
+        return [];
+    }
+
+    return [] unless defined $jsonText && $jsonText ne '';
+
+    my $decoder;
+    if (eval { require JSON::PP; JSON::PP->can('decode_json') })
+    {
+        $decoder = sub { JSON::PP::decode_json($_[0]) };
+    }
+    elsif (eval { require JSON; JSON->can('decode_json') })
+    {
+        $decoder = sub { JSON::decode_json($_[0]) };
+    }
+    else
+    {
+        return [];
+    }
+
+    my $data = eval { $decoder->($jsonText) };
+    return [] if $@ || ref($data) ne 'HASH';
+    return [] unless ref($data->{milestones}) eq 'ARRAY';
+
+    return $data->{milestones};
+}
+
+sub evaluateMilestoneInline
+{
+    my ($milestone, $cfg, $status, $codeCoveragePercent, $styleSectionStatus) = @_;
+
+    my $reqs = (ref $milestone->{requirements} eq 'HASH')
+        ? $milestone->{requirements}
+        : {};
+    my @details = ();
+    my $allMet = 1;
+
+    if (defined $milestone->{dueDate})
+    {
+        my $subTime = $cfg->getProperty('submissionTimestamp');
+        my $met = 1;
+        my $actual = formatTimestampForDisplay($subTime);
+
+        if (defined $subTime && $subTime ne ''
+            && $subTime =~ /^\d+$/
+            && $milestone->{dueDate} =~ /^\d+$/
+            && $subTime > $milestone->{dueDate})
+        {
+            $met = 0;
+        }
+
+        push @details, {
+            name     => 'Due Date',
+            met      => $met,
+            expected => formatTimestampForDisplay($milestone->{dueDate}),
+            actual   => $actual
+        };
+        $allMet = 0 unless $met;
+    }
+
+    if (defined $reqs->{referenceTestsPassed})
+    {
+        my $instrResults = $status->{instrTestResults};
+        my $actualVal = 0;
+        if ($instrResults && $instrResults->testsExecuted > 0)
+        {
+            $actualVal = $instrResults->testPassRate * 100;
+        }
+
+        my $target = $reqs->{referenceTestsPassed};
+        my $met = ($actualVal >= $target - 0.001);
+        push @details, {
+            name     => 'Reference Tests',
+            met      => $met,
+            expected => ">= $target%",
+            actual   => sprintf('%.1f%%', $actualVal)
+        };
+        $allMet = 0 unless $met;
+    }
+
+    if ($reqs->{validationTestsPassed})
+    {
+        my $valResults = $status->{validateTestResults};
+        my $met = 0;
+        my $actual = 'Failed';
+        if ($valResults && $valResults->allTestsPass)
+        {
+            $met = 1;
+            $actual = 'Passed';
+        }
+
+        push @details, {
+            name     => 'Validation Tests',
+            met      => $met,
+            expected => 'All Pass',
+            actual   => $actual
+        };
+        $allMet = 0 unless $met;
+    }
+
+    if (defined $reqs->{stylePoints})
+    {
+        my $actualVal = defined $styleSectionStatus->{pointsGained}
+            ? $styleSectionStatus->{pointsGained}
+            : 0;
+        $actualVal = 0 unless defined $actualVal;
+        my $target = $reqs->{stylePoints};
+        my $met = ($actualVal >= $target);
+
+        push @details, {
+            name     => 'Style Points',
+            met      => $met,
+            expected => ">= $target",
+            actual   => sprintf('%g', $actualVal)
+        };
+        $allMet = 0 unless $met;
+    }
+
+    if (defined $reqs->{mutationCoverage})
+    {
+        my $actualVal = $codeCoveragePercent;
+        $actualVal = 0 unless defined $actualVal && $actualVal =~ /^\d+(?:\.\d+)?$/;
+        my $target = $reqs->{mutationCoverage};
+        my $met = ($actualVal >= $target);
+
+        push @details, {
+            name     => 'Mutation Coverage',
+            met      => $met,
+            expected => ">= $target%",
+            actual   => sprintf('%.1f%%', $actualVal)
+        };
+        $allMet = 0 unless $met;
+    }
+
+    return ($allMet, \@details);
+}
+
+sub printMilestoneFeedbackDetails
+{
+    my ($feedbackGenerator, $milestoneResults) = @_;
+
+    return unless $feedbackGenerator;
+    return unless $milestoneResults && @$milestoneResults;
+
+    $feedbackGenerator->print('<ul class="checklist">');
+
+    foreach my $result (@$milestoneResults)
+    {
+        my $name = htmlEscape($result->{name} // 'Milestone');
+        my $isMet = $result->{met} ? 1 : 0;
+        my $liClass = $isMet ? 'complete' : 'incomplete';
+        my $statusText = $isMet ? 'Met' : 'Not Met';
+
+        $feedbackGenerator->print("<li class=\"$liClass\">$name: $statusText");
+
+        if ($result->{details} && @{$result->{details}})
+        {
+            $feedbackGenerator->print('<ul class="checklist">');
+            foreach my $det (@{$result->{details}})
+            {
+                my $detClass = $det->{met} ? 'complete' : 'incomplete';
+                my $detName = htmlEscape($det->{name} // 'Requirement');
+                my $expected = htmlEscape($det->{expected} // '');
+                my $actual = htmlEscape($det->{actual} // '');
+                my $detStatus = $det->{met} ? 'Passed' : 'Failed';
+
+                $feedbackGenerator->print(
+                    "<li class=\"$detClass\">$detName: $detStatus "
+                    . "<b>Required:</b> $expected &mdash; "
+                    . "<b>Yours:</b> $actual</li>");
+            }
+            $feedbackGenerator->print('</ul>');
+        }
+
+        $feedbackGenerator->print('</li>');
+    }
+
+    $feedbackGenerator->print('</ul>');
+}
+
+sub generateMilestonePanelHtml
+{
+    my ($milestoneResults) = @_;
+
+    return '' unless $milestoneResults && @$milestoneResults;
+
+    my $totalMilestones = scalar @$milestoneResults;
+    my $metCount = 0;
+    foreach my $result (@$milestoneResults)
+    {
+        $metCount++ if $result->{met};
+    }
+
+    my $title = 'Milestones Met';
+    my $titleSuffix = " ($metCount/$totalMilestones)";
+    my $incomplete = ($metCount < $totalMilestones) ? ' incomplete' : '';
+
+    my $html = "  <div class=\"col-12 col-md-6 milestones panel$incomplete\" id=\"milestonesPanel\">\n";
+    $html .= "    <div class=\"module\">\n";
+    $html .= "      <div dojoType=\"webcat.TitlePane\" title=\"$title$titleSuffix\" open=\"false\">";
+
+    if ($metCount == $totalMilestones)
+    {
+        $html .= "<p><b>Milestones Met: $metCount/$totalMilestones</b></p>";
+        $html .= '<p>Congratulations! You have met all milestones for this assignment.</p>';
+    }
+    else
+    {
+        $html .= "<p>Milestones Met: <b class=\"warn\">$metCount/$totalMilestones</b></p>";
+        $html .= "<p>You have met <b class=\"warn\">$metCount out of $totalMilestones</b> milestones. ";
+        $html .= 'Review the details below to see which requirements need to be addressed.</p>';
+    }
+
+    $html .= '<p>The following milestones are defined for this assignment:</p>';
+    $html .= '<ul class="checklist">';
+
+    foreach my $result (@$milestoneResults)
+    {
+        my $name = htmlEscape($result->{name} // 'Milestone');
+        my $isMet = $result->{met} ? 1 : 0;
+        my $class = $isMet ? 'complete' : 'incomplete';
+        my $statusText = $isMet ? 'Met' : 'Not Met';
+
+        $html .= "<li class=\"$class\">$name: $statusText";
+        if ($result->{details} && @{$result->{details}})
+        {
+            $html .= '<ul class="checklist">';
+            foreach my $det (@{$result->{details}})
+            {
+                my $detClass = $det->{met} ? 'complete' : 'incomplete';
+                my $detName = htmlEscape($det->{name} // 'Requirement');
+                my $expected = htmlEscape($det->{expected} // '');
+                my $actual = htmlEscape($det->{actual} // '');
+                my $detStatus = $det->{met} ? 'Passed' : 'Failed';
+                $html .= "<li class=\"$detClass\">$detName: $detStatus <b>Required:</b> $expected &mdash; <b>Yours:</b> $actual</li>";
+            }
+            $html .= '</ul>';
+        }
+        $html .= '</li>';
+    }
+
+    $html .= '</ul>';
+    $html .= "</div>\n";
+    $html .= "      <div class=\"arrow borderArrow milestones detail\"></div>\n";
+    $html .= "      <div class=\"arrow milestones detail\"></div>\n";
+    $html .= "    </div>\n";
+    $html .= "  </div>\n";
+
+    return $html;
+}
+
 # Student feedback
 # -----------
 {
+    if ($useEMRN)
+    {
+        addReportFileWithStyle($cfg, 'emrn.html', 'text/html', 1);
+    }
     my $rptFile = $status{'feedback'};
     if (defined $rptFile)
     {
@@ -5142,7 +6718,8 @@ sub computeExpandSectionId
     }
 
     if ($testingSectionStatus{'errors'} == 0 ||
-        $testingSectionStatus{'failures'} == 0 ||
+        ($includeStudentTestsInGrading &&
+         $testingSectionStatus{'failures'} == 0) ||
         $testingSectionStatus{'methodsUncovered'} == 0 ||
         $testingSectionStatus{'statementsUncovered'} == 0 ||
         $testingSectionStatus{'conditionsUncovered'} == 0)
@@ -5240,6 +6817,14 @@ if ($useMaria)
     print IMPROVEDFEEDBACKFILE Web_CAT::Maria::chatbox();
 }
 
+# Milestones
+if (@milestoneResults)
+{
+    print IMPROVEDFEEDBACKFILE "<div class=\"row\">\n";
+    print IMPROVEDFEEDBACKFILE generateMilestonePanelHtml(\@milestoneResults);
+    print IMPROVEDFEEDBACKFILE "</div>\n";
+}
+
 # Coding Section
 my $incomplete = ($expandSectionId == 1) ? ' incomplete' : '';
 print IMPROVEDFEEDBACKFILE <<END_MESSAGE;
@@ -5332,7 +6917,7 @@ for my $element (@codingSectionOrder)
     {
         print IMPROVEDFEEDBACKFILE
             '<h2>', $errorStruct->entityName, '</h2><p class="errorType">',
-            htmlEscape($errorStruct->errorMessage), ' ';
+            smartHtmlEscapeAndPeel($errorStruct->errorMessage), ' ';
 
         my $msg = '';
 
@@ -5376,7 +6961,8 @@ for my $element (@codingSectionOrder)
         if ($errorStruct->enhancedMessage)
         {
             print IMPROVEDFEEDBACKFILE '<p><span>',
-                htmlEscape($errorStruct->enhancedMessage), '</span></p>';
+                smartHtmlEscapeAndPeel($errorStruct->enhancedMessage),
+                '</span></p>';
         }
     }
 }
@@ -5393,7 +6979,8 @@ if ($codingSectionStatus{'compilerErrors'} == 1 && $studentsMustSubmitTests)
 # Testing Section
 my $showTesting = 1;
 my $testingMsg = '';
-if ($status{'studentTestResults'}->testsExecuted == 0)
+if (!defined($status{'studentTestResults'}) ||
+    $status{'studentTestResults'}->testsExecuted == 0)
 {
     $showTesting = 0;
     $expandSectionId = 2;
@@ -5505,7 +7092,8 @@ for my $element (@testingSectionOrder)
     foreach my $errorStruct (@{$testingSectionExpanded{$element}})
     {
         print IMPROVEDFEEDBACKFILE '<h2>', $errorStruct->entityName, '</h2>',
-            '<p class="errorType">', htmlEscape($errorStruct->errorMessage),
+            '<p class="errorType">',
+            smartHtmlEscapeAndPeel($errorStruct->errorMessage),
             ' ';
 
         my $msg = '';
@@ -5563,7 +7151,8 @@ for my $element (@testingSectionOrder)
         if ($errorStruct->enhancedMessage)
         {
             print IMPROVEDFEEDBACKFILE '<p><span>',
-                htmlEscape($errorStruct->enhancedMessage), '</span></p>';
+                smartHtmlEscapeAndPeel($errorStruct->enhancedMessage),
+                '</span></p>';
         }
     }
 }
@@ -5572,6 +7161,7 @@ print IMPROVEDFEEDBACKFILE <<END_MESSAGE;
   </div>
 </div>
 END_MESSAGE
+}
 }
 
 
@@ -5586,7 +7176,8 @@ if ($studentsMustSubmitTests)
         $behaviorMsg = '<p>Fix <b class="warn">Unit Test Coding Problems</b> '
             . '(see above) for behavioral analysis.</p>';
     }
-    elsif ($status{'studentTestResults'}->testsExecuted == 0)
+    elsif (!defined $status{'studentTestResults'}
+            || $status{'studentTestResults'}->testsExecuted == 0)
     {
         $showBehavior = 0;
         $behaviorMsg = '<p>Your own software tests must be included for '
@@ -5732,7 +7323,8 @@ for my $element (@behaviorSectionOrder)
     foreach my $errorStruct (@{$behaviorSectionExpanded{$element}})
     {
         print IMPROVEDFEEDBACKFILE '<h2>', $errorStruct->entityName, '</h2>',
-            '<p class="errorType">', htmlEscape($errorStruct->errorMessage), ' ';
+            '<p class="errorType">',
+            smartHtmlEscapeAndPeel($errorStruct->errorMessage), ' ';
         my $msg = Web_CAT::Maria::explainButton(
             runtimeErrorHintKey($errorStruct->errorMessage),
             $useMariaExplanations);
@@ -5763,7 +7355,8 @@ for my $element (@behaviorSectionOrder)
         if ($errorStruct->enhancedMessage)
         {
             print IMPROVEDFEEDBACKFILE '<p><span>',
-                htmlEscape($errorStruct->enhancedMessage), '</span></p>';
+                smartHtmlEscapeAndPeel($errorStruct->enhancedMessage),
+                '</span></p>';
         }
     }
     }
@@ -5874,7 +7467,8 @@ for my $element (@styleSectionOrder)
     foreach my $errorStruct (@{$styleSectionExpanded{$element}})
     {
         print IMPROVEDFEEDBACKFILE '<h2>', $errorStruct->entityName, '</h2>',
-            '<p class="errorType">', htmlEscape($errorStruct->errorMessage),
+            '<p class="errorType">',
+            smartHtmlEscapeAndPeel($errorStruct->errorMessage),
             "</p>\n";
 
         my @linesOfCode = split /\n/, $errorStruct->linesOfCode;
@@ -5903,7 +7497,8 @@ for my $element (@styleSectionOrder)
         if ($errorStruct->enhancedMessage)
         {
             print IMPROVEDFEEDBACKFILE '<p><span>',
-                htmlEscape($errorStruct->enhancedMessage), '</span></p>';
+                smartHtmlEscapeAndPeel($errorStruct->enhancedMessage),
+                '</span></p>';
         }
     }
 }
@@ -5913,15 +7508,17 @@ print IMPROVEDFEEDBACKFILE <<END_MESSAGE;
 </div>
 END_MESSAGE
 }
-}
+
 
 print IMPROVEDFEEDBACKFILE "</div>\n";
 close IMPROVEDFEEDBACKFILE;
 
 #print compilerErrorHintKey('final parameter abc may not be assigned');
 
+
+#=============================================================================
 # PDF printout
-# -----------
+#=============================================================================
 if (-f $pdfPrintout)
 {
     addReportFileWithStyle(
@@ -5934,14 +7531,282 @@ if (-f $pdfPrintout)
         "PDF code printout");
 }
 
+
+#=============================================================================
+# EMRN Scoring and Feedback
+#=============================================================================
+if ($useEMRN)
+{
+  my $maxPossible = $maxCorrectnessScore + $maxToolScore;
+  my $rawScore = $runtimeScore + $staticScore;
+  my $rawPct = $rawScore / $maxPossible;
+  my $subTime = $cfg->getProperty('submissionTimestamp', 0);
+  my $dueTime = $cfg->getProperty('dueDateTimestamp', $subTime);
+
+  my $emrnCmt = '';
+  my $emrnCategory = 'Not Assessable';
+#   print <<EOF;
+# rawPct = $rawPct
+# runtimeScore = $runtimeScore, max = $maxCorrectnessScore
+# staticScore = $staticScore, max = $maxToolScore
+# EOF
+
+  if ($useEMRNManual)
+  {
+   $emrnExcellent = $emrnRevisionNeeded;
+   $emrnMeetsExpectations = $emrnRevisionNeeded;
+  }
+
+  # Excellent
+  if ($rawPct >= 0.95
+    && $runtimeScore / $maxCorrectnessScore >= 0.95
+    && $staticScore / $maxToolScore >= 0.95
+    # && $subTime <= $dueTime
+    )
+  {
+    $emrnCategory = 'Excellent';
+    if ($runtimeScore < $maxCorrectnessScore || $staticScore < $maxToolScore)
+    {
+      $emrnCmt = 'Your submission passes most auto-grader checks and '
+        . 'appears to only have a few small issues remaining. To perfect '
+        . 'your work, '
+        . 'use the feedback below to identify any remaining areas for '
+        . 'improvement.';
+    }
+    else
+    {
+      $emrnCmt = 'Your submission passes all auto-grader checks for this '
+        . 'assignment.';
+    }
+    $staticScore = $maxToolScore
+      * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+      * $emrnExcellent;
+    $runtimeScore = $maxCorrectnessScore
+      * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+      * $emrnExcellent;
+  }
+
+  # Meets expectations
+  elsif ($rawPct >= 0.86
+    && $runtimeScore / $maxCorrectnessScore >= 0.86
+    && $staticScore / $maxToolScore >= 0.92)
+  {
+#     if ($maxPossible < 100)
+#     {
+      $staticScore = $maxToolScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnMeetsExpectations;
+      $runtimeScore = $maxCorrectnessScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnMeetsExpectations;
+#      if (!$useEMRNManual)
+#      {
+#        $staticScore *= 10.0 / 11.0;
+#        $runtimeScore *= 10.0 / 11.0;
+#      }
+#     }
+#     elsif ($staticScore == $maxToolScore)
+#     {
+#       $runtimeScore = $maxPossible * 0.8 - $staticScore;
+#     }
+#     elsif ($runtimeScore == $maxCorrectnessScore)
+#     {
+#       $staticScore = $maxPossible * 0.8 - $runtimeScore;
+#     }
+#     else
+#     {
+#       $staticScore = 0.8 * $maxToolScore;
+#       $runtimeScore = 0.8 * $maxCorrectnessScore;
+#     }
+    $emrnCategory = 'Meets Expectations';
+    $emrnCmt = 'Your submission meets most expectations, but there are still '
+      . 'some areas where improvements can be made. See the feedback below '
+      . 'to address these issues.';
+  }
+  elsif ($rawPct > 0 && $runtimeScore > 0)
+  {
+#    my $target = 10; # Should be programmable
+      $staticScore = $maxToolScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnRevisionNeeded;
+      $runtimeScore = $maxCorrectnessScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnRevisionNeeded;
+#      if (!$useEMRNManual)
+#      {
+#        $staticScore *= 1.0 / 10.0;
+#        $runtimeScore *= 1.0 / 10.0;
+#      }
+
+#     if ($staticScore == $maxToolScore)
+#     {
+#       $runtimeScore = $target - $staticScore;
+#     }
+#     elsif ($runtimeScore == $maxCorrectnessScore)
+#     {
+#       $staticScore = $target - $runtimeScore;
+#     }
+#     else
+#     {
+#       $staticScore = $target / 2;
+#       $runtimeScore = $target / 2;
+#     }
+    $emrnCategory = 'Revision Needed';
+    $emrnCmt = 'Your submission meets some expectations, but there are still '
+      . 'some areas where improvements are needed. See the feedback below '
+      . 'to address these issues.';
+  }
+  else
+  {
+    $runtimeScore = 0;
+    $staticScore = 0;
+    $emrnCategory = 'Not Assessable';
+    $emrnCmt = 'Your submission cannot be assessed effectively. See the '
+      . 'feedback below to identify the issues that need to be addressed.';
+  }
+
+  print "EMRN category = $emrnCategory\n" if ($debug > 1);
+  my $emrnLetter = substr($emrnCategory, 0, 1);
+  $cfg->setProperty('score.category', $emrnCategory);
+  if ($useEMRNManual)
+  {
+    $emrnCmt .= ' Be sure to double-check the assignment\'s manually '
+      . 'graded criteria yourself.';
+  }
+
+  my $emrnFileName = "$resultDir/emrn.html";
+        open(EMRNFEEDBACKFILE, ">$emrnFileName")
+            || croak "Cannot open '$emrnFileName' for writing: $!";
+
+        print EMRNFEEDBACKFILE <<END_MESSAGE;
+<div class="row">
+  <div class="col-12 col-md-6"><div class="module">
+    <h1>Auto-Grader Criteria: ($emrnLetter) $emrnCategory</h1>
+    <p>$emrnCmt</p>
+  </div></div>
+</div>
+END_MESSAGE
+  close(EMRNFEEDBACKFILE);
+}
+
+
+my @milestone_results = ();
+
+for (my $i = 0; $i < $milestoneCount; $i++) {
+    my $mNum = defined($milestoneNumbers[$i]) ? $milestoneNumbers[$i] : ($i + 1);
+    my $dueDate = $milestoneDueDatesTimestamps[$i];
+    my $status = "IN PROGRESS";
+
+     # Requirements
+    my $reqStudentTests = $milestoneMinStudentTests[$i] // 0;
+    my $reqRefTests = $milestoneMinRefTests[$i] //0;
+    my $reqCover = $milestoneMinMutationCoverages[$i] // 0;
+    my $reqStyle = $milestoneStyleMins[$i] // 0;
+
+    next unless milestoneHasConfiguredRequirements(
+        $cfg->getProperty("milestoneDueDate.$mNum"),
+        $cfg->getProperty("milestoneDueTime.$mNum"),
+        $reqStudentTests, $reqRefTests, $reqStyle, $reqCover);
+
+    my $actualStudentTests = 0;
+    my $actualRefTests = 0;
+    my $actualCoverage = 0;
+    my $actualStyle =  0;
+
+
+
+    if ($milestoneAlreadyPassed[$i]) {
+        # SKIP THE CHECK: They already passed it!
+        $status = "ACHIEVED";
+
+        $actualStudentTests = $reqStudentTests;
+        $actualRefTests = $reqRefTests;
+        $actualCoverage = $reqCover;
+        $actualStyle = $reqStyle;
+
+    } else {
+        # Actuals
+        $actualStudentTests = (defined $status{'validateTestResults'}) ? ($status{'validateTestResults'}->testsExecuted - $status{'validateTestResults'}->testsFailed) : 0;
+        $actualRefTests =
+            (defined $instructorCasesPercent
+                && $instructorCasesPercent =~ /^\d+(?:\.\d+)?$/)
+            ? $instructorCasesPercent
+            : 0;
+        $actualCoverage = $testingSectionStatus{'codeCoveragePercent'};
+        $actualStyle = defined $styleSectionStatus{'pointsGained'}
+            ? $styleSectionStatus{'pointsGained'}
+            : $styleSectionStatus{'pointsGainedPercent'};
+
+        # Determine Status
+        my $met = ($actualStudentTests >= $reqStudentTests && $actualCoverage >= $reqCover && $actualStyle >= $reqStyle && $actualRefTests >= $reqRefTests) ? 1 : 0;
+
+        if ($met) {
+            $status = "ACHIEVED";
+            $cfg->setProperty("milestonePassed.$mNum", "true");
+        } elsif (defined($dueDate)
+                 && $dueDate > 0
+                 && $cfg->getProperty('submissionTimestamp', 0) > $dueDate) {
+            $status = "MISSED";
+        }
+    }
+
+    # 2. Build the json for this milestone
+    my %milestone_entry = (
+        milestoneNumber => $mNum,
+        dueDate         => (defined($dueDate) ? $dueDate : 0),
+        status          => $status,
+        requirements    => {
+            minStudentTests => int($reqStudentTests),
+            minRefTests => int($reqRefTests),
+            minCover => int($reqCover),
+            minStyle => int($reqStyle)
+        },
+        actuals         => {
+            studentTests => $actualStudentTests,
+            referenceTests => $actualRefTests,
+            cover => $actualCoverage,
+            style => $actualStyle
+        }
+    );
+
+    push @milestone_results, \%milestone_entry;
+}
+
+# 3. Write to milestones.json
+my $json_output = {
+    submissionDate => $cfg->getProperty('submissionTimestamp', 0),
+    milestones     => \@milestone_results
+};
+
+# Encode and write
+eval {
+    require JSON::PP;
+    my $json_text = JSON::PP->new->utf8->pretty->encode($json_output);
+    my $milestoneFilename = "$resultDir/milestones.json";
+
+    open(my $fh, '>', $milestoneFilename) or die "Could not open '$milestoneFilename' for writing: $!";
+    print $fh $json_text;
+    close $fh;
+    print "Successfully wrote milestone data to $milestoneFilename\n" if $debug;
+};
+if ($@) {
+    print "Error generating JSON: $@" if $debug;
+}
+
+
+#=============================================================================
 # Script log
-# ----------
+#=============================================================================
 if (-f $scriptLog && stat($scriptLog)->size > 0)
 {
     addReportFileWithStyle($cfg, $scriptLogRelative, "text/plain", 0, "admin");
     addReportFileWithStyle($cfg, $antLogRelative,    "text/plain", 0, "admin");
 }
 
+
+#=============================================================================
+# Save score and rewrite properties
+#=============================================================================
 $cfg->setProperty('score.correctness', $runtimeScore);
 $cfg->setProperty('score.tools',       $staticScore );
 $cfg->setProperty('expSectionId',      $expSectionId);

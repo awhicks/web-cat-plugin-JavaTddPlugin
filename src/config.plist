@@ -1,9 +1,9 @@
 {
     name             = "JavaTddPlugin";
     version.major    = 4;
-    version.minor    = 1;
-    version.revision = 2;
-    version.date     = 20190420;
+    version.minor    = 2;
+    version.revision = 0;
+    version.date     = 20260526;
     autoPublish      = true;
     requires         = ( ANTForPlugins, PerlForPlugins,
                          PMDForPlugins, CheckstyleForPlugins );
@@ -12,7 +12,7 @@
     license          = "GNU Affero General Public License v.3";
     license.url      = "http://www.gnu.org/licenses/agpl.html";
     copyright        =
-        "(c) 2006-2018 Virginia Tech Department of Computer Science";
+        "(c) 2006-2026 Virginia Tech Department of Computer Science";
     info.url         = "http://wiki.web-cat.org/WCWiki/JavaTddPlugin";
     history.url      =
         "http://wiki.web-cat.org/WCWiki/JavaTddPlugin/ChangeHistory";
@@ -20,11 +20,7 @@
     interpreter.prefix = "${PerlForPlugins.perl.exe}";
     author     = "Stephen Edwards (edwards@cs.vt.edu)";
     authorUid  = edwards;
-    languages  = ( { name = Java; version = 1.4; },
-                   { name = Java; version = 1.5; },
-                   { name = Java; version = 1.6; },
-                   { name = Java; version = 1.7; },
-                   { name = Java; version = 1.8; } );
+    languages  = ( { name = Java; version = 1.14; } );
     description = "This \"all-in-one\" plug-in is designed to provide full
         processing and feedback generation for Java assignments where
         students write their own JUnit test cases.
@@ -93,12 +89,49 @@
   copied into the current working directory during grading so that
   student-written and instructor-written test cases can read and/or write to
   the file(s).  The default is to copy no files.";
+        },
+        {
+            property    = referenceImplementationJar;
+            type        = fileOrDir;
+            fileTypes   = ( jar );
+            name        = "Reference Implementation Jar File";
+            description =
+  "A jar file containing a precompiled reference implementation for the
+  project to run against student tests to assess completeness of testing
+  coverage. Test outcomes are directly visible to students. This solution
+  is for <b>this assignment only</b>. If you have multiple jars to provide,
+  place them all in the same directory in your Web-CAT file space and then
+  select the whole directory.";
+        },
+        {
+            property    = testCaseValidationFileName;
+            type        = shortText;
+            size        = 40;
+            default     = "ProblemSpecTest";
+            name        = "Test Case Validation File Name";
+            description =
+  "Specify the java class name to use for test case validation.";
+        },
+        {
+            property    = coverageGoal;
+            type        = double;
+            name        = "Test Coverage Goal";
+            category    = "Basic Settings";
+            description =
+  "If students are required to submit tests, this value is the target test
+  coverage threshold that must be achieved in order for students to receive
+  full credit.  It should be a number between 0.0-100.0 representing the
+  minimum percent coverage required for full credit.  The default is 100.0,
+  but a lower value may be used to allow students some slack in test coverage
+  when JaCoCo test coverage measures make achieving 100% too challenging.";
         }
     );
     optionCategories = (
         "Basic Settings",
         "Advanced Settings",
-        "Developer Settings"
+        "Experimental Settings",
+        "Developer Settings",
+        "Milestone Settings"
     );
     options = (
         {
@@ -226,6 +259,17 @@
   rate will not be included in scoring).";
         },
         {
+            property    = includeStudentTestsInGrading;
+            type        = boolean;
+            default     = true;
+            name        = "Include Student Test Results in Grading";
+            category    = "Basic Settings";
+            description =
+  "When set, if students are required to submit tests, they are also included
+  in the scoring formula. When false, student test pass/fail ressults are
+  not included in the score calculation.";
+        },
+        {
             property    = coverageMetric;
             advanced    = true;
             type        = radioChoice;
@@ -243,19 +287,6 @@
                          { label = "Methods + lines + conditions executed";
                               value = 4; }
                           );
-        },
-        {
-            property    = coverageGoal;
-            type        = double;
-            name        = "Test Coverage Goal";
-            category    = "Basic Settings";
-            description =
-  "If students are required to submit tests, this value is the target test
-  coverage threshold that must be achieved in order for students to receive
-  full credit.  It should be a number between 0.0-100.0 representing the
-  minimum percent coverage required for full credit.  The default is 100.0,
-  but a lower value may be used to allow students some slack in test coverage
-  when JaCoCo test coverage measures make achieving 100% too challenging.";
         },
         {
             property    = includeTestSuitesInCoverage;
@@ -468,7 +499,7 @@
             property    = use.comtor;
             type        = antBoolean;
             name        = "Run COMTOR Comment Analyzer";
-            category    = "Basic Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to run the COMTOR Comment Analyzer and include the results
   as part of the overall feedback report.";
@@ -509,7 +540,7 @@
             type        = file;
             fileTypes   = ( properties );
             name        = "Static Analysis Scoring Scheme";
-            category    = "Basic Settings";
+            category    = "Advanced Settings";
             description =
   "A Java properties file containing the point deductions and limits to
   use for messages generated by Checkstyle or PMD.  The point deductions
@@ -524,7 +555,7 @@
             advanced    = true;
             type        = double;
             name        = "Static Analysis Deduction Scaling Factor";
-            category    = "Basic Settings";
+            category    = "Advanced Settings";
             description =
   "The <b>Static Analysis Scoring Scheme</b> above defines the point deductions
   and limits to use for messages generated by Checkstyle or PMD in a generic
@@ -573,7 +604,7 @@
             type        = integer;
             default     = 0;
             name        = "Hide Hints X Days Before Deadline";
-            category    = "Basic Settings";
+            category    = "Advanced Settings";
             description =
   "Suppress all hints from failed reference tests for submissions within this
   many days of the deadline (set to zero for hints to always be visible).
@@ -586,7 +617,7 @@
             type        = integer;
             default     = 0;
             name        = "Show Hints X Days Before Deadline";
-            category    = "Basic Settings";
+            category    = "Advanced Settings";
             description =
   "Show hints (up to the <i>Hints Limit</i>) from failed reference tests for
   submissions within this many days of the deadline (only useful when <i>Hide
@@ -671,7 +702,7 @@
             type        = antBoolean;
             advanced    = true;
             name        = "Generate Bug Heatmaps";
-            category    = "Developer Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to generate GZoltar-based defect heatmaps.  This option is
   <b>experimental</b> and for research use only.  Using it will slow down
@@ -683,7 +714,7 @@
             advanced    = true;
             default     = false;
             name        = "Use Enhanced Feedback (Experimental)";
-            category    = "Developer Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to use the new (experimental) enhanced feedback layout.";
         },
@@ -693,7 +724,7 @@
             advanced    = true;
             default     = false;
             name        = "Use Growth Mindset Feedback (Experimental)";
-            category    = "Developer Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to use the new (experimental) growth mindset progress feedback.";
         },
@@ -703,7 +734,7 @@
             advanced    = true;
             default     = false;
             name        = "Use Maria (Experimental)";
-            category    = "Developer Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to show Maria (experimental), the virtual teaching assistant
   chatbot.";
@@ -714,7 +745,7 @@
             advanced    = true;
             default     = false;
             name        = "Use Maria Explanations (Experimental)";
-            category    = "Developer Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to show \"Explain...\" links (experimental) by error messages.";
         },
@@ -724,7 +755,7 @@
             advanced    = true;
             default     = false;
             name        = "Use Daily Missions (Experimental)";
-            category    = "Developer Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to give students daily mission challenges (experimental).";
         },
@@ -734,12 +765,369 @@
             advanced    = true;
             default     = false;
             name        = "Show All Test Outcomes (Experimental)";
-            category    = "Developer Settings";
+            category    = "Experimental Settings";
             description =
   "Set to true to use the new (experimental) feature to show all test outcomes
   instead of limited hints. Students still need to meet the coverage
   requirements and other requirements to see test outcomes, but will see
   the full table of tests instead of limited hints.";
+        },
+        {
+            property    = useFindBugs;
+            type        = boolean;
+            advanced    = true;
+            default     = false;
+            name        = "Use FindBugs (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to true to add FindBugs analysis to the static analysis scoring of
+  the assignment. This will cause FindBugs to be run on student submissions,
+  and the results will be used to give feedback to students. Not all FindBugs
+  warnings/errors will be shown--the specific list used is research-driven.
+  There currently are no controls for changing the scoring scheme or enabling
+  or disabling specific FindBugs checks.";
+        },
+        {
+            property    = usePit;
+            type        = antBoolean;
+            advanced    = true;
+            default     = false;
+            name        = "Use PIT Mutation Analysis (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to true to turn on mutation analysis for evaluating student-written
+  test suites. This is highly experimental and not advised for production
+  use except in research settings.";
+        },
+        {
+            property    = useEMRN;
+            type        = antBoolean;
+            advanced    = true;
+            default     = false;
+            name        = "Use EMRN Grading (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to true to turn on EMRN grading scale support instead of points.";
+        },
+        {
+            property    = useEMRNManual;
+            type        = antBoolean;
+            advanced    = true;
+            default     = false;
+            name        = "Use EMRN with Manual Grading (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to true when using EMRN to save the EMR distinctions for manual
+  grading, or leave false for EMRN with full auto-grading.";
+        },
+        {
+            property    = emrnExcellent;
+            type        = integer;
+            advanced    = true;
+            default     = 100;
+            name        = "EMRN Point Value - Excellent (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to the value to use for EMRN (E) scores (points, not percentage)
+  when not using manual grading.";
+        },
+        {
+            property    = emrnMeetsExpectations;
+            type        = integer;
+            advanced    = true;
+            default     = 100;
+            name        = "EMRN Point Value - Meets Expectations (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to the value to use for EMRN (M) scores (points, not percentage)
+  when not using manual grading.";
+        },
+        {
+            property    = emrnRevisionNeeded;
+            type        = integer;
+            advanced    = true;
+            default     = 10;
+            name        = "EMRN Point Value - Revision Needed (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to the value to use for EMRN (R) scores (points, not percentage)
+  when not using manual grading.";
+        },
+        {
+            property    = useJdk11;
+            type        = boolean;
+            advanced    = true;
+            default     = false;
+            name        = "Use Java 11 (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to true to switch to Java 11.";
+        },
+        {
+            property    = useTestCaseValidation;
+            type        = antBoolean;
+            advanced    = true;
+            default     = false;
+            name        = "Run student test cases against reference implementation (Experimental)";
+            category    = "Developer Settings";
+            description =
+  "Set to true to turn on test case validation for running student-written
+  test suites against reference implementations.";
+        },
+        {
+            property    = showTestCaseValidation;
+            type        = antBoolean;
+            advanced    = true;
+            default     = false;
+            name        = "Show students their test cases against the reference implementation (Experimental)";
+            category    = "Developer Settings";
+            description =
+  "Set to true to show students test case validation for running student-written
+  test suites against reference implementations.";
+        },
+        {
+            property    = includeValidationInGrading;
+            type        = antBoolean;
+            advanced    = true;
+            default     = false;
+            name        = "Include Test Validation Results in Grading";
+            category    = "Developer Settings";
+            description =
+  "When set, students grade for test case validation will be included in
+  the scoring formula. When false, student test validation results are
+  not included in the score calculation.";
+        },
+        {
+            property    = maxValidationPenalty;
+            type        = integer;
+            advanced    = true;
+            default     = 10;
+            name        = "Max Validation Penalty";
+            category    = "Developer Settings";
+            description =
+  "Set the maximum penalty that can be applied for test case validation failures.";
+        },
+        {
+            property    = validationTestsRequired;
+            type        = integer;
+            advanced    = true;
+            default     = 10;
+            name        = "Test Cases Required for Validation";
+            category    = "Developer Settings";
+            description =
+  "Set the minimum number of test cases that must be submitted for test case
+  validation.";
+        },
+        {
+            property    = validationFailuresAllowed;
+            type        = integer;
+            advanced    = true;
+            default     = 0;
+            name        = "Test Case Validation Failures Allowed";
+            category    = "Developer Settings";
+            description =
+  "Set the maximum number of test case validation failures allowed.";
+        },
+        {
+            property    = milestonePassed.1;
+            type        = boolean;
+            default     = false;
+            name        = "Milestone 1 Passed";
+            category    = "Milestone Settings";
+            description =
+        "If milestone 1 had already been passed.";
+        },
+        {
+            property    = milestoneDueDate.1;
+            type        = integer;
+            default     = 0;
+            size        = 40;
+            name        = "Milestone 1 Due Date (YYYYMMDD)";
+            category    = "Milestone Settings";
+            description =
+        "The milestone check automatically activates for submissions made before
+        this date. Use ISO format YYYYMMDD. Leave blank to disable milestone checks.";
+        },
+        {
+            property    = milestoneDueTime.1;
+            type        = integer;
+            default     = 0;
+            size        = 40;
+            name        = "Milestone 1 Time Due (HHMMSS)";
+            category    = "Milestone Settings";
+            description =
+        "The milestone check automatically activates for submissions made before
+        this time. Use format HHMMSS.";
+        },
+        {
+            property    = milestoneMinStudentTests.1;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Student Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum number of student-written JUnit tests required before the milestone due date.";
+        },
+        {
+            property    = milestoneMinRefTests.1;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Reference Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum percentage of Reference tests required before the milestone due date.";
+        },
+        {
+            property    = milestoneStyleMin.1;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Style Score for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum passing style score required before the milestone due date.";
+        },
+        {
+            property    = milestoneMinMutationCoverage.1;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Mutation Coverage Student Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum mutation coverage required before the milestone due date.";
+        },
+        {
+            property    = milestonePassed.2;
+            type        = boolean;
+            default     = false;
+            name        = "Milestone 2 Passed";
+            category    = "Milestone Settings";
+            description =
+        "If milestone 2 has been passed.";
+        },
+        {
+            property    = milestoneDueDate.2;
+            type        = integer;
+            default     = 0;
+            size        = 40;
+            name        = "Milestone 2 Due Date (YYYYMMDD)";
+            category    = "Milestone Settings";
+            description =
+        "The milestone check automatically activates for submissions made before
+        this date. Use ISO format YYYYMMDD. Leave blank to disable milestone checks.";
+        },
+        {
+            property    = milestoneDueTime.2;
+            type        = integer;
+            default     = 0;
+            size        = 40;
+            name        = "Milestone 1 Time Due (HHMMSS)";
+            category    = "Milestone Settings";
+            description =
+        "The milestone check automatically activates for submissions made before
+        this time. Use format HHMMSS.";
+        },
+        {
+            property    = milestoneMinStudentTests.2;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Student Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum number of student-written JUnit tests required before the milestone due date.";
+        },
+        {
+            property    = milestoneMinRefTests.2;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Reference Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum percentage of Reference tests required before the milestone due date.";
+        },
+        {
+            property    = milestoneStyleMin.2;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Style Score for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum passing style score required before the milestone due date.";
+        },
+        {
+            property    = milestoneMinMutationCoverage.2;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Mutation Coverage Student Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum mutation coverage required before the milestone due date.";
+        },
+        {
+            property    = milestonePassed.3;
+            type        = boolean;
+            default     = false;
+            name        = "Milestone 3 Passed";
+            category    = "Milestone Settings";
+            description =
+        "If milestone 3 has been passed";
+        },
+        {
+            property    = milestoneDueDate.3;
+            type        = integer;
+            default     = 0;
+            size        = 40;
+            name        = "Milestone 3 Due Date (YYYYMMDD)";
+            category    = "Milestone Settings";
+            description =
+        "The milestone check automatically activates for submissions made before
+        this date. Use ISO format YYYYMMDD. Leave blank to disable milestone checks.";
+        },
+        {
+            property    = milestoneDueTime.3;
+            type        = integer;
+            default     = 0;
+            size        = 40;
+            name        = "Milestone 1 Time Due (HHMMSS)";
+            category    = "Milestone Settings";
+            description =
+        "The milestone check automatically activates for submissions made before
+        this time. Use format HHMMSS.";
+        },
+        {
+            property    = milestoneMinStudentTests.3;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Student Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum number of student-written JUnit tests required before the milestone due date.";
+        },
+        {
+            property    = milestoneMinRefTests.3;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Reference Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum percentage of Reference tests required before the milestone due date.";
+        },
+        {
+            property    = milestoneStyleMin.3;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Style Score for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum passing style score required before the milestone due date.";
+        },
+        {
+            property    = milestoneMinMutationCoverage.3;
+            type        = integer;
+            default     = 0;
+            name        = "Minimum Mutation Coverage Student Tests for Milestone";
+            category    = "Milestone Settings";
+            description =
+        "Minimum mutation coverage required before the milestone due date.";
         }
     );
     globalOptions = (
