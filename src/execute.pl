@@ -6360,8 +6360,6 @@ if ($useEMRN)
     # && $subTime <= $dueTime
     )
   {
-    $staticScore = $maxToolScore; # * 1.1;
-    $runtimeScore = $maxCorrectnessScore; # * 1.1;
     $emrnCategory = 'Excellent';
     if ($runtimeScore < $maxCorrectnessScore || $staticScore < $maxToolScore)
     {
@@ -6376,6 +6374,8 @@ if ($useEMRN)
       $emrnCmt = 'Your submission passes all auto-grader checks for this '
         . 'assignment.';
     }
+    $staticScore = $maxToolScore * 1.1;
+    $runtimeScore = $maxCorrectnessScore * 1.1;
   }
   elsif ($rawPct >= 0.86
     && $runtimeScore / $maxCorrectnessScore >= 0.86
@@ -6385,11 +6385,11 @@ if ($useEMRN)
 #     {
       $staticScore = $maxToolScore;
       $runtimeScore = $maxCorrectnessScore;
-      if (!$useEMRNManual)
-      {
-        $staticScore *= 10.0 / 11.0;
-        $runtimeScore *= 10.0 / 11.0;
-      }
+#      if (!$useEMRNManual)
+#      {
+#        $staticScore *= 10.0 / 11.0;
+#        $runtimeScore *= 10.0 / 11.0;
+#      }
 #     }
 #     elsif ($staticScore == $maxToolScore)
 #     {
@@ -6411,14 +6411,15 @@ if ($useEMRN)
   }
   elsif ($rawPct > 0 && $runtimeScore > 0)
   {
-    my $target = 10; # Should be programmable
-    $staticScore = $maxToolScore;
-    $runtimeScore = $maxCorrectnessScore; # * 0.1;
-      if (!$useEMRNManual)
-      {
-        $staticScore *= 1.0 / 11.0;
-        $runtimeScore *= 1.0 / 11.0;
-      }
+#    my $target = 10; # Should be programmable
+    $staticScore = $maxToolScore * 0.1;
+    $runtimeScore = $maxCorrectnessScore * 0.1;
+#      if (!$useEMRNManual)
+#      {
+#        $staticScore *= 1.0 / 10.0;
+#        $runtimeScore *= 1.0 / 10.0;
+#      }
+
 #     if ($staticScore == $maxToolScore)
 #     {
 #       $runtimeScore = $target - $staticScore;
