@@ -12,7 +12,7 @@
     license          = "GNU Affero General Public License v.3";
     license.url      = "http://www.gnu.org/licenses/agpl.html";
     copyright        =
-        "(c) 2006-2022 Virginia Tech Department of Computer Science";
+        "(c) 2006-2025 Virginia Tech Department of Computer Science";
     info.url         = "http://wiki.web-cat.org/WCWiki/JavaTddPlugin";
     history.url      =
         "http://wiki.web-cat.org/WCWiki/JavaTddPlugin/ChangeHistory";
@@ -796,6 +796,39 @@
             description =
   "Set to true when using EMRN to save the EMR distinctions for manual
   grading, or leave false for EMRN with full auto-grading.";
+        },
+        {
+            property    = emrnExcellent;
+            type        = integer;
+            advanced    = true;
+            default     = 100;
+            name        = "EMRN Point Value - Excellent (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to the value to use for EMRN (E) scores (points, not percentage)
+  when not using manual grading.";
+        },
+        {
+            property    = emrnMeetsExpectations;
+            type        = integer;
+            advanced    = true;
+            default     = 100;
+            name        = "EMRN Point Value - Meets Expectations (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to the value to use for EMRN (M) scores (points, not percentage)
+  when not using manual grading.";
+        },
+        {
+            property    = emrnRevisionNeeded;
+            type        = integer;
+            advanced    = true;
+            default     = 10;
+            name        = "EMRN Point Value - Revision Needed (Experimental)";
+            category    = "Experimental Settings";
+            description =
+  "Set to the value to use for EMRN (R) scores (points, not percentage)
+  when not using manual grading.";
         },
         {
             property    = useJdk11;

@@ -113,6 +113,9 @@ my $useEMRN = $cfg->getProperty('useEMRN', 0);
 $useEMRN = ($useEMRN =~ m/^(true|on|yes|y|1)$/i);
 my $useEMRNManual = $cfg->getProperty('useEMRNManual', 0);
 $useEMRNManual = ($useEMRNManual =~ m/^(true|on|yes|y|1)$/i);
+my $emrnExcellent = $cfg->getProperty('emrnExcellent', 100);
+my $emrnMeetsExpectations = $cfg->getProperty('emrnMeetsExpectations', 100);
+my $emrnRevisionNeeded = $cfg->getProperty('emrnRevisionNeeded', 100);
 my $useJdk11 = $cfg->getProperty('useJdk11', 0);
 $useJdk11 = ($useJdk11 =~ m/^(true|on|yes|y|1)$/i);
 my $allTestOutcomeResults = '';
@@ -5300,10 +5303,10 @@ EOF
         $status{'feedback'}->print(" $studentCasesPercent% * ");
     }
     $status{'feedback'}->print("$codeCoveragePercent% ");
-    if ($coverageGoal < 1)
-    {
-        $status{'feedback'}->print("/ $printableCoverageGoal% ");
-    }
+#    if ($coverageGoal < 1)
+#    {
+#        $status{'feedback'}->print("/ $printableCoverageGoal% ");
+#    }
     $status{'feedback'}->print(<<EOF);
 * $instructorCasesPercent%
 * $maxCorrectnessScore
@@ -6377,8 +6380,13 @@ if ($useEMRN)
       $emrnCmt = 'Your submission passes all auto-grader checks for this '
         . 'assignment.';
     }
-    $staticScore = $maxToolScore * 1.1;
-    $runtimeScore = $maxCorrectnessScore * 1.1;
+    
+    $staticScore = $maxToolScore
+      * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+      * $emrnExcellent;
+    $runtimeScore = $maxCorrectnessScore
+      * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+      * $emrnExcellent;
   }
   elsif ($rawPct >= 0.86
     && $runtimeScore / $maxCorrectnessScore >= 0.86
@@ -6386,8 +6394,12 @@ if ($useEMRN)
   {
 #     if ($maxPossible < 100)
 #     {
-      $staticScore = $maxToolScore;
-      $runtimeScore = $maxCorrectnessScore;
+      $staticScore = $maxToolScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnMeetsExpectations;
+      $runtimeScore = $maxCorrectnessScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnMeetsExpectations;
 #      if (!$useEMRNManual)
 #      {
 #        $staticScore *= 10.0 / 11.0;
@@ -6415,8 +6427,12 @@ if ($useEMRN)
   elsif ($rawPct > 0 && $runtimeScore > 0)
   {
 #    my $target = 10; # Should be programmable
-    $staticScore = $maxToolScore * 0.1;
-    $runtimeScore = $maxCorrectnessScore * 0.1;
+      $staticScore = $maxToolScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnRevisionNeeded;
+      $runtimeScore = $maxCorrectnessScore
+        * 1.0 / ($maxToolScore + $maxCorrectnessScore)
+        * $emrnRevisionNeeded;
 #      if (!$useEMRNManual)
 #      {
 #        $staticScore *= 1.0 / 10.0;
