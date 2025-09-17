@@ -2844,8 +2844,8 @@ if ($usePit)
     {
       $ptsPerUncovered = -1.0 /
         $gradedElements
-        * $runtimeScoreWithoutCoverage
-        * $coverageGoal;
+        * $runtimeScoreWithoutCoverage;
+        # * $coverageGoal;
     }
   }
   for my $fileName (keys %coveredByFile)
@@ -3357,8 +3357,8 @@ else
             {
                 $ptsPerUncovered = -1.0 /
                     $gradedElements
-                    * $runtimeScoreWithoutCoverage
-                    * $coverageGoal;
+                    * $runtimeScoreWithoutCoverage;
+                    # * $coverageGoal;
             }
             if ($ptsPerUncovered < 0)
             {
@@ -5159,8 +5159,11 @@ if ($studentsMustSubmitTests)
 {
     if ($gradedElements > 0)
     {
-        my $multiplier = $gradedElementsCovered * 1.0 / $gradedElements
-            / $coverageGoal;
+        my $multiplier = $gradedElementsCovered * 1.0 / $gradedElements;
+        if ($multiplier >= $coverageGoal)
+        {
+           $multiplier = 1.0;
+        }
         if ($multiplier * 100.0 < $minCoverageLevel)
         {
             # print "multiplier = $multiplier\n";
