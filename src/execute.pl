@@ -6359,7 +6359,13 @@ if ($useEMRN)
 # staticScore = $staticScore, max = $maxToolScore
 # EOF
   
-  # Meets expectations
+  if ($useEMRNManual)
+  {
+   $emrnExcellent = $emrnRevisionNeeded;
+   $emrnMeetsExpectations = $emrnRevisionNeeded;
+  }
+  
+  # Excellent
   if ($rawPct >= 0.95
     && $runtimeScore / $maxCorrectnessScore >= 0.95
     && $staticScore / $maxToolScore >= 0.95
@@ -6388,6 +6394,8 @@ if ($useEMRN)
       * 1.0 / ($maxToolScore + $maxCorrectnessScore)
       * $emrnExcellent;
   }
+
+  # Meets expectations
   elsif ($rawPct >= 0.86
     && $runtimeScore / $maxCorrectnessScore >= 0.86
     && $staticScore / $maxToolScore >= 0.92)
