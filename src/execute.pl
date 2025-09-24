@@ -2838,7 +2838,7 @@ if ($usePit)
   $cfg->setProperty("statElementsLabel", "Mutants Detected");
   my %fileDeductionProperties = ();
   my $ptsPerUncovered = 0.0;
-  if ($studentsMustSubmitTests)
+  if ($includeStudentTestsInGrading)
   {
     if ($gradedElements > 0
       && $runtimeScoreWithoutCoverage > 0
@@ -3350,7 +3350,7 @@ else
         }
         $cfg->setProperty("statElementsLabel", "$label Executed");
 
-        if ($studentsMustSubmitTests)
+        if ($includeStudentTestsInGrading)
         {
             $ptsPerUncovered = 0;
             if ($gradedElements > 0
@@ -3913,6 +3913,7 @@ You must fix these problems with your own tests to get further feedback.</p>
 EOF
         }
         elsif ($studentsMustSubmitTests
+            && $includeStudentTestsInGrading
             && (!$status{'studentTestResults'}->hasResults
                 || $gradedElements == 0
                 || $gradedElementsCovered / $gradedElements * 100.0 <
@@ -3941,7 +3942,7 @@ EOF
             if (defined $hints && $hints ne "")
             {
                 my $extra = '';
-                if ($studentsMustSubmitTests)
+                if ($includeStudentTestsInGrading)
                 {
                     $extra = 'and your testing';
                 }
@@ -5158,7 +5159,7 @@ my $show_gzoltar = ($instructorCasesPercent < 10) ? 0 : 1;
 
 # Second, the coverage/testing/correctness component
 my $runtimeScore = $runtimeScoreWithoutCoverage;
-if ($studentsMustSubmitTests)
+if ($includeStudentTestsInGrading)
 {
     if ($gradedElements > 0)
     {
@@ -5301,8 +5302,8 @@ EOF
     if ($includeStudentTestsInGrading)
     {
         $status{'feedback'}->print(" $studentCasesPercent% * ");
+        $status{'feedback'}->print("$codeCoveragePercent% ");
     }
-    $status{'feedback'}->print("$codeCoveragePercent% ");
 #    if ($coverageGoal < 1)
 #    {
 #        $status{'feedback'}->print("/ $printableCoverageGoal% ");
