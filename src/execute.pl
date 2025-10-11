@@ -2226,13 +2226,15 @@ if (defined $status{'studentTestResults'}
         }
     }
     $studentCasesPercent =
-        int($status{'studentTestResults'}->testPassRate * 100.0 + 0.5);
+         $status{'studentTestResults'}->testPassRate * 100.0;
+         # int($status{'studentTestResults'}->testPassRate * 100.0 + 0.5);
     if ($status{'studentTestResults'}->testsFailed > 0
         && $studentCasesPercent == 100)
     {
         # Don't show 100% if some cases failed
-        $studentCasesPercent--;
+        $studentCasesPercent -= 0.1;
     }
+    $studentCasesPercent = sprintf("%.1f", $studentCasesPercent * 100);
 }
 elsif ($studentsMustSubmitTests)
 {
@@ -5811,7 +5813,7 @@ print IMPROVEDFEEDBACKFILE <<END_MESSAGE;
 END_MESSAGE
 
 my $testingPct = ($testingSectionStatus{'codeCoveragePercent'}
-    * $testingSectionStatus{'resultsPercent'}) / 100;
+    * $testingSectionStatus{'resultsPercent'}) / 100.0;
 print IMPROVEDFEEDBACKFILE 'transform: rotate(' .
     180 * $testingPct / 100 . 'deg);';
 
