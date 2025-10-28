@@ -2518,10 +2518,20 @@ sub computeMethodsUncovered
 
     foreach my $method (@{ $class->{method} })
     {
-        my $counter = $method->{counter}('type', 'eq', 'INSTRUCTION');
+        if (!defined($method->{name}) || $method->{name}->content eq '')
+        {
+            next;
+        }
+        my $counter = $method->{counter}('type', 'eq', 'METHOD');
 
         # print("method: ", $method->{name}->content, "\n");
-        if ($counter->{covered} != 0)
+        if ($counter->{covered} != 0 || !defined($counter->{missed}))
+        {
+            next;
+        }
+
+        $counter = $method->{counter}('type', 'eq', 'INSTRUCTION');
+        if ($counter->{covered} != 0 || !defined($counter->{missed}))
         {
             next;
         }
