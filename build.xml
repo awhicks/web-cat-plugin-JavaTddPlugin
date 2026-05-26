@@ -151,9 +151,6 @@
         stylesheetfile="../../Web-CAT/javadoc.css"
         windowtitle="JavaTddPlugin Documentation">
       <classpath>
-        <fileset dir="/Users/edwards/eclipse/plugins/org.junit4_4.3.1">
-          <include name="*.jar"/>
-        </fileset>
       	<pathelement location="src/defaultJars/student.jar"/>
       </classpath>
       <sourcepath>
