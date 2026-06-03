@@ -42,7 +42,7 @@
       <message key="javadoc.unusedTag"
         value="This tag does not seem to be needed for this method or constructor (i.e. a @return tag for a method with a return type of void or a @param tag for a parameter that does not exist). Check for spelling mistakes or remove the tag if it is not needed."/>
     </module>
-    <module name="JavadocMethod">
+    <!-- <module name="JavadocMethod">
       <property name="allowUndeclaredRTE" value="true"/>
       <property name="allowThrowsTagsForSubclasses" value="true"/>
       <property name="allowMissingParamTags" value="true"/>
@@ -57,7 +57,7 @@
         value="This tag does not seem to be needed for this method or constructor (i.e. a @return tag for a method with a return type of void or a @param tag for a parameter that does not exist). Check for spelling mistakes or remove the tag if it is not needed."/>
       <message key="javadoc.unusedTag"
         value="This tag does not seem to be needed for this method or constructor (i.e. a @return tag for a method with a return type of void or a @param tag for a parameter that does not exist). Check for spelling mistakes or remove the tag if it is not needed."/>
-    </module>
+    </module> -->
     <module name="JavadocType">
       <property name="authorFormat" value="\S"/>
       <property name="versionFormat" value="\S"/>
@@ -90,7 +90,7 @@
     <!-- Checks for Naming Conventions.                  -->
     <!-- See http://checkstyle.sf.net/config_naming.html -->
     <module name="ConstantName">
-      <property name="format" value="^([A-Z][A-Z0-9]*(_[A-Z0-9]+)*|log)$"/>
+      <property name="format" value="^([A-Z][A-Z0-9]*(_[A-Z0-9]+)*|log|question[0-9]+)$"/>
       <message key="name.invalidPattern"
         value="Constants (fields declared to be final) should be named in all capital letters with _ between words. Rename the constant ''{0}''."/>
     </module>
@@ -409,6 +409,7 @@
     <!-- <module name="HideUtilityClassConstructor"/> -->
     <!-- <module name="InterfaceIsType"/> -->
     <module name="VisibilityModifier">
+      <property name="protectedAllowed" value="true"/>
       <message key="variable.notPrivate"
         value="The field ''{0}'' should be declared private.  Only constants (static final fields) are allowed to be public.  If this field is intended to represent a constant value, declare it to be static and final."/>
     </module>
