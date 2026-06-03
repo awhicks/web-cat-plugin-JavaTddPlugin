@@ -160,7 +160,8 @@ sub checkForPatternInFile
 
 	while (<FILECONTENT>)
 	{
-		if (index(lc($_), lc($pattern)) != -1)
+#		if (index(lc($_), lc($pattern)) != -1)
+        if (m/$pattern/)
 		{
 			return 1;
 		}

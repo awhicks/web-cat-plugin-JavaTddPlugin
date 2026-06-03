@@ -30,6 +30,7 @@ use Data::Dump qw(dump);
 #=============================================================================
 my $propfile   = $ARGV[0];     # property file name
 my $cfg        = Config::Properties::Simple->new(file => $propfile);
+$cfg->{wrap} = 0;
 
 my $pluginHome = $cfg->getProperty('pluginHome');
 {
@@ -1661,6 +1662,11 @@ sub trackMessageInstance
             print $msg;
         }
     }
+    
+    if ($group eq "suppress")
+    {
+        return;
+    }
 
     if (!$violation->{line}->content
       && $violation->{endline}->content)
@@ -2475,7 +2481,7 @@ sub computeFileNameUsingClassName
     # pattern we are looking for is "class $className "
     for my $longName (keys %codeMarkupIds)
     {
-        if (checkForPatternInFile($longName, 'class' . ' ' .$className. ' '))
+        if (checkForPatternInFile($longName, 'class' . ' ' . $className . ' '))
         {
             # print "longName from file scan = $longName\n";
             return $longName;
@@ -3497,9 +3503,9 @@ if ($status{'studentHasSrcs'}
     # Mark the Errors and Failures flags for the testingSectionStatus.
     $testingSectionStatus{'errors'} = negateValueZeroToOneAndOneToZero(
         checkForPatternInFile("$resultDir/student-results.txt",
-        'Caused an ERROR'));
+        '\bCaused an ERROR\b'));
     $testingSectionStatus{'failures'} = negateValueZeroToOneAndOneToZero(
-        checkForPatternInFile("$resultDir/student-results.txt", 'FAILED'));
+        checkForPatternInFile("$resultDir/student-results.txt", '\bFAILED\b'));
 
     # Access each suite and generate error struct for
     # Testing errors and failures
@@ -3997,11 +4003,11 @@ EOF
         # Mark Behavior Section Status appropriately
         $behaviorSectionStatus{'errors'} = negateValueZeroToOneAndOneToZero(
             checkForPatternInFile(
-            "$resultDir/instr-results.txt", 'Caused an ERROR'));
+            "$resultDir/instr-results.txt", '\bCaused an ERROR\b'));
 
         $behaviorSectionStatus{'failures'} = negateValueZeroToOneAndOneToZero(
             checkForPatternInFile(
-            "$resultDir/instr-results.txt", 'FAILED'));
+            "$resultDir/instr-results.txt", '\bFAILED\b'));
 
         markBehaviorSectionUsingInstrTests();
         markCodingSectionUsingInstrResults();
