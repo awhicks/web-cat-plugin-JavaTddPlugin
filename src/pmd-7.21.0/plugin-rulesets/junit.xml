@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<ruleset name="JUnit Rules (JavaTddPlugin version)"
+         xmlns="http://pmd.sf.net/ruleset/2.0.0"
+>
+
+    <description>
+        These rules deal with different problems that can occur with JUnit
+        tests. This version of the ruleset includes alternate messages
+        from the main PMD rulesets/java/design.xml ruleset.
+    </description>
+
+    <!--    Use custom rules instead of the built-in ones since we use a custom student.TestCase class. The built-in rules look for a TestCase class with a different FQN-->
+
+    <rule name="JUnitStaticSuite"
+          language="java"
+          class="edu.vt.cs.webcat.rules.JUnitStaticSuiteRule"
+          message="You have a suite() method that is not both public and static, so JUnit won't call it to get your TestSuite. Is that what you wanted to do?"
+    />
+    <rule name="JUnitSpelling"
+          language="java"
+          class="edu.vt.cs.webcat.rules.JUnitSpellingRule"
+          message="You may have misspelled a JUnit framework method (setUp() or
+    tearDown()). Double-check your capitalization."
+    />
+    <rule name="UnitTestShouldIncludeAssert"
+          language="java"
+          class="edu.vt.cs.webcat.rules.UnitTestShouldIncludeAssertRule"
+          message="This unit test should include assert() or fail()"
+    />
+    <rule name="TestClassWithoutTestCases"
+          language="java"
+          class="edu.vt.cs.webcat.rules.TestClassWithoutTestCasesRule"
+          message="The class ''{0}'' might be a test class, but it contains no test cases."
+    />
+    <rule name="SimplifiableTestAssertion"
+          language="java"
+          class="edu.vt.cs.webcat.rules.SimplifiableTestAssertionRule"
+          message="Assertion may be simplified using {0}"/>
+
+</ruleset>
