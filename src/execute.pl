@@ -480,12 +480,6 @@ if ($useJdk11)
 {
 #    $ENV{JAVA_HOME} = '/usr/java/jdk-11';
     $ENV{JAVA_HOME} = '/usr/lib/jvm/java-11';
-
-    $cfg->setProperty('pmd.lib',
-        "${pluginHome}/pmd-7.21.0/lib");
-
-    $cfg->setProperty('pmdConfigFile',
-        "${pluginHome}/pmd-7.21.0/pmd.xml");
 }
 Web_CAT::Utilities::initFromConfig($cfg);
 if (defined($ENV{JAVA_HOME}))
