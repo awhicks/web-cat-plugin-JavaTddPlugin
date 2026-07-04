@@ -481,12 +481,6 @@ if ($useJdk11)
 #    $ENV{JAVA_HOME} = '/usr/java/jdk-11';
     $ENV{JAVA_HOME} = '/usr/lib/jvm/java-11';
 
-    $cfg->setProperty('checkstyle.jar',
-        "${pluginHome}/checkstyle-10.7.0/checkstyle-10.7.0-all.jar");
-
-    $cfg->setProperty('checkstyleConfigFile',
-        "${pluginHome}/checkstyle-10.7.0/checkstyle-10.7.0.xml");
-
     $cfg->setProperty('pmd.lib',
         "${pluginHome}/pmd-7.21.0/lib");
 
@@ -4917,7 +4911,7 @@ foreach my $ff (keys %codeMessages)
                  {
                      $lineNum = $c->{beginline}->content;
                  }
-                 
+
                  if (!defined($lineNum) || $lineNum eq '' )
                  {
                       print "no line number found in:\n",
