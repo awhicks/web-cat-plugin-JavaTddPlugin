@@ -20,42 +20,41 @@ rules.
   link in the PMD documentation to find the order used here.
   -->
 
-  <rule ref="plugin-rulesets/basic.xml"/>
-  <rule ref="plugin-rulesets/braces.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/basic.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/braces.xml"/>
   <!-- clone.xml -->
-  <rule ref="plugin-rulesets/codesize.xml"/>
-  <!--
-  <rule ref="plugin-rulesets/controversial.xml"/>
-  -->
-  <rule ref="rulesets/java/controversial.xml/SuspiciousOctalEscape"/>
-  <rule ref="rulesets/java/controversial.xml/AvoidAccessibilityAlteration"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/codesize.xml"/>
+
+  <rule ref="pmd-7.21.0/plugin-rulesets/controversial.xml"/>
+
   <!-- coupling.xml -->
-  <rule ref="plugin-rulesets/design.xml"/>
-  <rule ref="plugin-rulesets/empty.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/design.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/empty.xml"/>
   <!-- favorites.xml -->
   <!-- finalizers.xml" -->
-  <rule ref="plugin-rulesets/imports.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/imports.xml"/>
   <!-- j2ee.xml -->
   <!-- javabeans.xml -->
   <!-- jsprulesets.properties -->
-  <rule ref="plugin-rulesets/junit.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/junit.xml"/>
   <!-- logging-jakarta-commons.xml -->
   <!-- logging-java.xml -->
   <!-- migrating.xml -->
   <!-- migrating_to_13.xml -->
   <!-- migrating_to_14.xml -->
   <!-- migrating_to_15.xml -->
-  <rule ref="plugin-rulesets/naming.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/naming.xml"/>
   <!-- optimizations.xml -->
   <!-- rulesets.properties -->
   <!-- scratchpad.xml -->
-  <rule ref="plugin-rulesets/strictexception.xml"/>
-  <rule ref="plugin-rulesets/strings.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/strictexception.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/strings.xml"/>
   <!-- sunsecure.xml -->
-  <rule ref="plugin-rulesets/unnecessary.xml"/>
-  <rule ref="plugin-rulesets/unusedcode.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/unnecessary.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/unusedcode.xml"/>
   <!-- basic-jsp.xml -->
   <!-- basic-jsf.xml -->
-  <rule ref="plugin-rulesets/vt.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/vt.xml"/>
+  <rule ref="pmd-7.21.0/plugin-rulesets/migrated.xml"/>
 
 </ruleset>
